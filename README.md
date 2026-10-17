@@ -353,7 +353,7 @@ The left sidebar stays visible and shows the selected foreground's context actio
 - `UC_MiniMaxH3PDDAcc`
 - `UC_UnifiedAttentionPatcher`
 - `UC_Krea2NAG`
-- `UC_MOSSImageTemporalClipPatcher`
+- `UC_MOSSImageEditPatcher`
 - `UC_MarkdownPreview`
 - `UC_BoldFrakturTextStyle`
 - `UC_UnBoldFrakturTextStyle`
@@ -473,16 +473,17 @@ a guider without a negative input.
   guidance halfway through sampling to save generation time while keeping most
   of the negative prompt effect.
 
-### MOSS-Image Temporal Clip Patcher
+### MOSS-Image Edit Patcher
 
-`UC_MOSSImageTemporalClipPatcher` links a batch of MOSS-Image frames across time using windowed spatio-temporal tube attention, 1D block smoothing, and motion-warped starting noise so standard `Empty Flux 2 Latent` batches (`batch_size > 1`) generate short animated clips or consistent multi-frame sequences instead of unrelated still images.
+`UC_MOSSImageEditPatcher` configures a MOSS-Image diffusion model for reference-guided image editing, character or style transfer, and masked inpainting using clean reference attention across all 42 transformer blocks and spatial structure retention on the Flux 2 latent grid.
 
-Connect the MOSS-Image `model` (after `ModelSamplingAuraFlow` with `shift = 5.0`) through `UC_MOSSImageTemporalClipPatcher` to your sampler alongside an `Empty Flux 2 Latent` (`batch_size` set to the frame count, e.g. `4` to `8` at `512x512` or `768x512`) and decode with the `Flux 2` VAE.
+Connect the MOSS-Image `model` (after `ModelSamplingAuraFlow` with `shift = 5.0`) through `UC_MOSSImageEditPatcher` to your sampler. You can supply the reference image in any of three ways: connect a `Flux 2` `VAEEncode` latent to `reference_latent` on the patcher, attach reference images to your positive conditioning with `ReferenceLatent` or `UC_AdvancedVisualConditioningEncode` (with `vae` connected), or pass the `VAEEncode` latent directly into your sampler's `latent_image` input at `denoise = 1.0`.
 
-- `preset`: selects the motion and frame-linking profile (`balanced`, `subtle_motion`, `strong_motion`, or `character_consistency`).
-- `strength`: controls how strongly cross-frame tube attention is blended with each frame's spatial attention (default `0.60`; `0.0` disables cross-frame linking).
-- `loop`: wraps the motion trajectory and frame neighborhood links into a closed cycle so the last frame transitions smoothly back into the first frame for seamless looping GIFs (default `True`).
+- `preset`: selects the editing profile (`balanced_edit`, `preserve_structure`, `subject_reference`, `style_reference`, or `inpaint_only`).
+- `strength`: controls how strongly the 42 transformer blocks pull visual details and appearance from the reference image (default `0.65`; `0.0` disables reference attention).
+- `structure_retention`: controls how strongly the reference image's spatial layout, pose, and unedited background are preserved during the early composition steps (default `0.50`; set to `0.0` when placing a reference subject into a new pose or scene).
 - `uncond_skip_layer_22`: bypasses transformer block 22 on the negative prompt pass, matching OpenMOSS's recommended two-pass guidance setting without adding a third sampling pass (default `True`).
+- `reference_latent` and `mask` (optional): direct `LATENT` and `MASK` inputs for source-image editing and region-locked inpainting.
 
 ### Scheduler presets
 

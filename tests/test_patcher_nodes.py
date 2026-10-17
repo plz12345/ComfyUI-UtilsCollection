@@ -1719,55 +1719,47 @@ def test_krea2_nag_end_to_end_variable_length_and_ref_latents():
     assert recorded_opts["transformer_options"][patcher_helpers.KREA2_NAG_NEG_CONTEXT_KEY] is neg_context
 
 
-def test_moss_image_temporal_clip_patcher_end_to_end():
+def test_moss_image_edit_patcher_end_to_end():
     from comfy.ldm.moss_image import model as moss_model
-    import comfy.ops
 
     torch.manual_seed(7)
-    raw_noise = torch.randn(4, 16, 8, 8)
-    for mode in ("flow_warp", "cosine_arc", "slerp", "ar1", "shared", "independent"):
-        corr = patcher_helpers.correlate_moss_temporal_noise(
-            raw_noise,
-            frames_per_clip=4,
-            noise_mode=mode,
-            noise_correlation=0.85,
-            loop=True,
-        )
-        assert corr.shape == raw_noise.shape
-        for f in range(4):
-            assert 0.6 < float(corr[f].std()) < 1.4
-        if mode == "shared":
-            assert torch.allclose(corr[0], corr[3])
-        elif mode == "independent":
-            assert torch.allclose(corr, raw_noise)
-        elif mode != "flow_warp":
-            dot_01 = float((corr[0].flatten() * corr[1].flatten()).mean())
-            assert dot_01 > 0.3
+    raw_flux2 = torch.randn(2, 16, 4, 6)
+    unpatched = patcher_helpers.unpatchify_flux2_latent(raw_flux2)
+    assert unpatched.shape == (2, 4, 8, 12)
+    repatched = patcher_helpers.patchify_flux2_latent(unpatched)
+    assert torch.allclose(repatched, raw_flux2)
 
-    ids_single = patcher_helpers.build_moss_temporal_rope_ids(1, 2, 3, 5)
-    assert ids_single.shape == (2 * 3 + 5, 4)
-    assert torch.all(ids_single[:6, 0] == 0.0)
-    assert torch.all(ids_single[:6, 1] == 5.0)
-    assert torch.allclose(ids_single[6:, 1], torch.arange(5, dtype=torch.float32))
+    resized = patcher_helpers.resize_moss_reference_latent(raw_flux2, 6, 8)
+    assert resized.shape == (2, 16, 6, 8)
+    lp = patcher_helpers.lowpass_moss_latent(raw_flux2, kernel_size=3)
+    assert lp.shape == raw_flux2.shape
+    assert float(lp.std()) <= float(raw_flux2.std())
 
-    ids_multi = patcher_helpers.build_moss_temporal_rope_ids(
-        frames=3,
-        h=2,
-        w=2,
-        text_len=4,
-        temporal_stride=1.5,
-        reference_stride=0.5,
-        loop=False,
+    ids_aligned = patcher_helpers.build_moss_reference_rope_ids(
+        target_h=4,
+        target_w=6,
+        ref_h=4,
+        ref_w=6,
+        text_len=5,
+        ref_index=1,
+        rope_mode="spatial_aligned",
     )
-    assert ids_multi.shape == (3 * 4 + 4, 4)
-    assert torch.allclose(ids_multi[0:4, 0], torch.full((4,), 0.0))
-    assert torch.allclose(ids_multi[4:8, 0], torch.full((4,), 0.5))
-    assert torch.allclose(ids_multi[8:12, 0], torch.full((4,), 1.0))
-    assert torch.allclose(ids_multi[0:4, 1], torch.full((4,), 4.0))
-    assert torch.allclose(ids_multi[4:8, 1], torch.full((4,), 5.5))
-    assert torch.allclose(ids_multi[8:12, 1], torch.full((4,), 7.0))
-    assert torch.allclose(ids_multi[0:4, 2], ids_multi[4:8, 2])
-    assert torch.allclose(ids_multi[0:4, 3], ids_multi[4:8, 3])
+    assert ids_aligned.shape == (24, 4)
+    assert torch.all(ids_aligned[:, 0] == 0.0)
+    assert torch.all(ids_aligned[:, 1] == 5.0)
+
+    ids_ref_axis = patcher_helpers.build_moss_reference_rope_ids(
+        target_h=4,
+        target_w=6,
+        ref_h=3,
+        ref_w=3,
+        text_len=5,
+        ref_index=2,
+        rope_mode="reference_axis",
+    )
+    assert ids_ref_axis.shape == (9, 4)
+    assert torch.all(ids_ref_axis[:, 0] == 2.0)
+    assert torch.all(ids_ref_axis[:, 1] == 7.0)
 
     dit = moss_model.MOSSImage(
         dim=64,
@@ -1785,16 +1777,30 @@ def test_moss_image_temporal_clip_patcher_end_to_end():
         def percent_to_sigma(self, percent: float) -> float:
             return 1.0 - float(percent)
 
+    class FakeBaseModel:
+        def process_latent_in(self, latent):
+            return latent
+
+        def extra_conds(self, **kwargs):
+            return {}
+
     class FakeMOSSPatcher:
-        def __init__(self, diffusion, sampling):
+        def __init__(self, diffusion, sampling, base_model=None):
             self.diffusion = diffusion
             self.sampling = sampling
+            self.model = base_model or FakeBaseModel()
             self.model_options = {"transformer_options": {}}
+            self.object_patches = {}
 
         def clone(self):
-            cloned = FakeMOSSPatcher(self.diffusion, self.sampling)
+            cloned = FakeMOSSPatcher(self.diffusion, self.sampling, FakeBaseModel())
             cloned.model_options = comfy.model_patcher.create_model_options_clone(self.model_options)
+            cloned.object_patches = dict(self.object_patches)
             return cloned
+
+        def add_object_patch(self, name: str, obj):
+            self.object_patches[name] = obj
+            setattr(self.model, name, obj)
 
         def get_model_object(self, name: str):
             if name == "diffusion_model":
@@ -1811,120 +1817,112 @@ def test_moss_image_temporal_clip_patcher_end_to_end():
             wrappers[key] = [wrapper]
 
     base_patcher = FakeMOSSPatcher(dit, FakeModelSampling())
-    (patched_tube,) = patcher_nodes.UC_MOSSImageTemporalClipPatcher.execute(
+    ref_tensor = torch.randn(1, 16, 4, 4)
+    mask_tensor = torch.zeros(1, 4, 4)
+    mask_tensor[:, :2, :2] = 1.0  # Edit top-left 2x2, preserve rest
+
+    (patched_edit,) = patcher_nodes.UC_MOSSImageEditPatcher.execute(
         base_patcher,
-        frames_per_clip=0,
-        attention_mode="tube_attention",
-        temporal_strength=0.55,
-        tube_window=2,
-        temporal_smoothing=0.20,
-        noise_mode="flow_warp",
-        noise_correlation=0.85,
-        loop=True,
-        temporal_stride=1.0,
-        reference_stride=0.25,
+        preset="balanced_edit",
+        strength=0.75,
+        structure_retention=0.60,
+        uncond_skip_layer_22=False,
+        reference_latent={"samples": ref_tensor},
+        mask=mask_tensor,
         uncond_skip_layer=1,
-        attention_scale=1.1,
         start_percent=0.0,
-        end_percent=0.8,
+        end_percent=0.85,
     )
-    (patched_zero,) = patcher_nodes.UC_MOSSImageTemporalClipPatcher.execute(
+    (patched_zero,) = patcher_nodes.UC_MOSSImageEditPatcher.execute(
         base_patcher,
-        frames_per_clip=0,
-        attention_mode="tube_attention",
-        temporal_strength=0.0,
-        tube_window=2,
-        temporal_smoothing=0.0,
-        noise_mode="flow_warp",
-        noise_correlation=0.85,
-        loop=False,
+        preset="balanced_edit",
+        strength=0.0,
+        structure_retention=0.0,
+        uncond_skip_layer_22=False,
         uncond_skip_layer=-1,
     )
-    (patched_packed,) = patcher_nodes.UC_MOSSImageTemporalClipPatcher.execute(
+    (patched_subject,) = patcher_nodes.UC_MOSSImageEditPatcher.execute(
         base_patcher,
-        frames_per_clip=0,
-        attention_mode="packed_sequence",
-        temporal_stride=1.0,
-        reference_stride=0.25,
-        noise_mode="cosine_arc",
-        noise_correlation=0.85,
-        loop=False,
-        uncond_skip_layer=1,
-        attention_scale=1.1,
-        start_percent=0.0,
-        end_percent=0.8,
+        preset="subject_reference",
+        strength=0.80,
+        structure_retention=0.0,
+        uncond_skip_layer_22=False,
+        uncond_skip_layer=-1,
     )
 
-    x = torch.randn(3, 16, 3, 3)
-    timesteps = torch.tensor([0.5, 0.5, 0.5])
-    context = torch.randn(1, 5, 32).expand(3, -1, -1).contiguous()
+    # Verify extra_conds patch extracts reference_latents from conditioning
+    extra = patched_edit.model.extra_conds(reference_latents=[ref_tensor])
+    assert "ref_latents" in extra
+
+    x = torch.randn(2, 16, 4, 4)
+    timesteps = torch.tensor([0.5, 0.5])
+    context = torch.randn(2, 5, 32)
 
     old_training = comfy.model_management.in_training
     comfy.model_management.in_training = True
     try:
-        baseline_out = dit(x, timesteps, context, transformer_options={"cond_or_uncond": [0]})
+        baseline_out = dit(x, timesteps, context, transformer_options={"cond_or_uncond": [0, 1]})
 
-        # With temporal_strength=0.0 and temporal_smoothing=0.0, tube_attention matches baseline exactly
+        # Zero strength & no mask matches baseline exactly
         zero_opts = {
             "wrappers": patched_zero.model_options["wrappers"],
-            "cond_or_uncond": [0],
+            "cond_or_uncond": [0, 1],
             "sigmas": torch.tensor([0.5]),
         }
         zero_out = dit(x, timesteps, context, transformer_options=zero_opts)
         assert torch.allclose(zero_out, baseline_out, atol=1e-5)
 
-        outer_wrapper = patched_tube.model_options["wrappers"][comfy.patcher_extension.WrappersMP.OUTER_SAMPLE][
-            patcher_helpers.MOSS_IMAGE_TEMPORAL_OUTER_SAMPLE_WRAPPER_KEY
+        # OUTER_SAMPLE anchors noise and rescues non-empty sampler latent_image
+        outer_wrapper = patched_edit.model_options["wrappers"][comfy.patcher_extension.WrappersMP.OUTER_SAMPLE][
+            patcher_helpers.MOSS_IMAGE_EDIT_OUTER_SAMPLE_WRAPPER_KEY
         ][0]
         captured_noise = []
         outer_wrapper(
             lambda n, *_a, **_kw: captured_noise.append(n),
             x.clone(),
-            None,
+            ref_tensor.expand_as(x),
             None,
             None,
         )
         assert len(captured_noise) == 1
         assert captured_noise[0].shape == x.shape
-        assert not torch.allclose(captured_noise[0], x)
+        # Inside mask (top-left 2x2) noise is unanchored, outside mask it is anchored toward reference low-pass
+        assert torch.allclose(captured_noise[0][:, :, :2, :2], x[:, :, :2, :2], atol=1e-5)
+        assert not torch.allclose(captured_noise[0][:, :, 2:, 2:], x[:, :, 2:, 2:], atol=1e-4)
 
-        cond_opts = {
-            "wrappers": patched_tube.model_options["wrappers"],
-            "cond_or_uncond": [0],
+        # Diffusion wrapper applies 42-layer reference KV attention, structure guidance, and exact unmasked preservation
+        edit_opts = {
+            "wrappers": patched_edit.model_options["wrappers"],
+            "cond_or_uncond": [0, 1],
             "sigmas": torch.tensor([0.5]),
         }
-        tube_out = dit(x, timesteps, context, transformer_options=cond_opts)
-        assert tube_out.shape == baseline_out.shape
-        assert not torch.allclose(tube_out, baseline_out, atol=1e-4)
+        edit_v = dit(x, timesteps, context, transformer_options=edit_opts)
+        assert edit_v.shape == baseline_out.shape
+        assert not torch.allclose(edit_v, baseline_out, atol=1e-4)
 
-        # Uncond pass skips layer 1 via uncond_skip_layer=1
-        uncond_opts = {
-            "wrappers": patched_tube.model_options["wrappers"],
-            "cond_or_uncond": [1],
+        # Verify unmasked region (bottom-right 2x2 where mask == 0) predicts exact reference x0 = x - sigma * v
+        x0_edited = x - 0.5 * edit_v
+        assert torch.allclose(x0_edited[:, :, 2:, 2:], ref_tensor.expand_as(x)[:, :, 2:, 2:], atol=1e-4)
+
+        # Subject reference mode with conditioning ref_latents (even at different spatial size 3x3) runs cleanly
+        subject_opts = {
+            "wrappers": patched_subject.model_options["wrappers"],
+            "cond_or_uncond": [0, 1],
             "sigmas": torch.tensor([0.5]),
         }
-        uncond_out = dit(x, timesteps, context, transformer_options=uncond_opts)
-        assert uncond_out.shape == baseline_out.shape
-        assert not torch.allclose(uncond_out, tube_out, atol=1e-4)
+        small_ref = torch.randn(1, 16, 3, 3)
+        subject_v = dit(x, timesteps, context, transformer_options=subject_opts, ref_latents=[small_ref])
+        assert subject_v.shape == baseline_out.shape
+        assert not torch.allclose(subject_v, baseline_out, atol=1e-4)
 
-        # Outside sigma window (sigma=0.1 < 0.2 for end_percent=0.8), tube attention is bypassed
+        # Outside sigma window (sigma=0.05 < 0.15 for end_percent=0.85), wrapper is bypassed
         late_opts = {
-            "wrappers": patched_tube.model_options["wrappers"],
-            "cond_or_uncond": [0],
-            "sigmas": torch.tensor([0.1]),
+            "wrappers": patched_edit.model_options["wrappers"],
+            "cond_or_uncond": [0, 1],
+            "sigmas": torch.tensor([0.05]),
         }
         late_out = dit(x, timesteps, context, transformer_options=late_opts)
         assert torch.allclose(late_out, baseline_out, atol=1e-5)
-
-        # packed_sequence mode also runs cleanly
-        packed_opts = {
-            "wrappers": patched_packed.model_options["wrappers"],
-            "cond_or_uncond": [0],
-            "sigmas": torch.tensor([0.5]),
-        }
-        packed_out = dit(x, timesteps, context, transformer_options=packed_opts)
-        assert packed_out.shape == baseline_out.shape
-        assert not torch.allclose(packed_out, baseline_out, atol=1e-4)
     finally:
         comfy.model_management.in_training = old_training
 

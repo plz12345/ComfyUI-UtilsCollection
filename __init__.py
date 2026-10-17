@@ -179,7 +179,7 @@ class SamplingUtils(ComfyExtension):
             UC_UnifiedAttentionPatcher,
             UC_Ideogram4DebannerPatch,
             UC_Krea2NAG,
-            UC_MOSSImageTemporalClipPatcher,
+            UC_MOSSImageEditPatcher,
             UC_MiniMaxH3ClipProjectionPatcher,
             UC_MiniMaxH3PDDAcc,
             UC_MiniMaxH3Cache,

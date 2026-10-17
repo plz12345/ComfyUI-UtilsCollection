@@ -17,8 +17,8 @@ from ..helpers.patcher_helpers import (
     patch_unified_attention_model,
     patch_minimax_h3_cache_model,
     patch_minimax_h3_diffusion_cache_model,
-    MOSS_IMAGE_TEMPORAL_PRESETS,
-    patch_moss_image_temporal_model,
+    MOSS_IMAGE_EDIT_PRESETS,
+    patch_moss_image_edit_model,
 )
 
 
@@ -636,49 +636,55 @@ class UC_MiniMaxH3DiffusionCache(io.ComfyNode):
         )
 
 
-class UC_MOSSImageTemporalClipPatcher(io.ComfyNode):
+class UC_MOSSImageEditPatcher(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
         return io.Schema(
-            node_id="UC_MOSSImageTemporalClipPatcher",
-            display_name="MOSS-Image Temporal Clip Patcher",
+            node_id="UC_MOSSImageEditPatcher",
+            display_name="MOSS-Image Edit Patcher",
             category="advanced/model/patches",
             description=(
-                "Links a batch of MOSS-Image frames across time using windowed spatio-temporal tube attention and motion-warped starting noise "
-                "so standard Flux 2 latent batches generate short animated clips instead of unrelated still images."
+                "Configures a MOSS-Image diffusion model for reference-guided image editing, character/style transfer, and masked inpainting "
+                "using clean reference attention across all 42 transformer blocks and spatial structure retention."
             ),
             inputs=[
                 io.Model.Input(
                     "model",
-                    tooltip="MOSS-Image diffusion model to configure for multi-frame clip generation. Connect the output to your sampler alongside an Empty Flux 2 Latent with batch_size set to the number of frames.",
+                    tooltip="MOSS-Image diffusion model to configure for reference-guided image editing. Connect the output to your sampler.",
                 ),
                 io.Combo.Input(
                     "preset",
-                    options=list(MOSS_IMAGE_TEMPORAL_PRESETS.keys()),
-                    default="balanced",
+                    options=list(MOSS_IMAGE_EDIT_PRESETS.keys()),
+                    default="balanced_edit",
                     tooltip=(
-                        "Motion and frame-linking profile. 'balanced' combines smooth motion flow with stable subject appearance; "
-                        "'subtle_motion' keeps frames tightly locked for gentle animation; 'strong_motion' allows wider frame-to-frame movement; "
-                        "and 'character_consistency' locks subject appearance across multi-view batches."
+                        "Editing profile. 'balanced_edit' combines prompt-driven edits with reference layout and appearance preservation; "
+                        "'preserve_structure' locks pose, framing, and composition tightly to the reference image; "
+                        "'subject_reference' transfers a reference character or object into a new pose or scene using the reference index axis; "
+                        "'style_reference' transfers color palette and brushwork into a new composition; "
+                        "and 'inpaint_only' edits inside a connected mask while keeping unmasked areas locked to the reference."
                     ),
                 ),
                 io.Float.Input(
                     "strength",
-                    default=0.60,
+                    default=0.65,
+                    min=0.0,
+                    max=2.0,
+                    step=0.05,
+                    tooltip=(
+                        "Overall reference guidance strength across the 42 transformer blocks. The default 0.65 balances prompt changes with reference details; "
+                        "raising it pulls stronger appearance and texture from the reference image, while 0.0 disables reference attention."
+                    ),
+                ),
+                io.Float.Input(
+                    "structure_retention",
+                    default=0.50,
                     min=0.0,
                     max=1.0,
                     step=0.05,
                     tooltip=(
-                        "How strongly frames are linked across time. The default 0.60 balances consistent subject appearance with visible motion; "
-                        "raising it toward 1.0 locks frames tighter together, while 0.0 disables cross-frame tube linking."
-                    ),
-                ),
-                io.Boolean.Input(
-                    "loop",
-                    default=True,
-                    tooltip=(
-                        "When enabled, wraps the motion trajectory and frame neighborhood links into a closed cycle so the last frame transitions smoothly "
-                        "back into the first frame for seamless looping GIFs. Turn off for one-way clips."
+                        "How strongly the reference image's spatial layout, pose, and unedited background are preserved during the early composition steps. "
+                        "The default 0.50 keeps the overall composition while allowing object or clothing edits; raise toward 1.0 to lock layout tightly, "
+                        "or set to 0.0 when placing a reference subject into a completely new pose or scene."
                     ),
                 ),
                 io.Boolean.Input(
@@ -689,12 +695,29 @@ class UC_MOSSImageTemporalClipPatcher(io.ComfyNode):
                         "for sharper structure without adding a third sampling pass. Turn off to run all blocks on the negative pass."
                     ),
                 ),
+                io.Latent.Input(
+                    "reference_latent",
+                    optional=True,
+                    tooltip=(
+                        "Optional VAE-encoded reference or source image latent (encoded with the Flux 2 VAE). "
+                        "You can also attach reference images to conditioning with ReferenceLatent or Advanced Visual Conditioning Encode, "
+                        "or pass the encoded image directly into your sampler's latent_image input at denoise 1.0."
+                    ),
+                ),
+                io.Mask.Input(
+                    "mask",
+                    optional=True,
+                    tooltip=(
+                        "Optional edit mask where white (1.0) marks regions to edit according to the prompt and black (0.0) preserves the reference image. "
+                        "Leave disconnected to edit across the full image."
+                    ),
+                ),
             ],
             outputs=[
                 io.Model.Output(
                     "model",
                     display_name="model",
-                    tooltip="MOSS-Image model configured for multi-frame temporal clip generation.",
+                    tooltip="MOSS-Image model configured for reference-guided image editing.",
                 )
             ],
             is_experimental=True,
@@ -704,19 +727,23 @@ class UC_MOSSImageTemporalClipPatcher(io.ComfyNode):
     def execute(
         cls,
         model,
-        preset: str = "balanced",
-        strength: float = 0.60,
-        loop: bool = True,
+        preset: str = "balanced_edit",
+        strength: float = 0.65,
+        structure_retention: float = 0.50,
         uncond_skip_layer_22: bool = True,
+        reference_latent=None,
+        mask=None,
         **kwargs,
     ) -> io.NodeOutput:
         return io.NodeOutput(
-            patch_moss_image_temporal_model(
+            patch_moss_image_edit_model(
                 model=model,
                 preset=preset,
                 strength=strength,
-                loop=loop,
+                structure_retention=structure_retention,
                 uncond_skip_layer_22=uncond_skip_layer_22,
+                reference_latent=reference_latent,
+                mask=mask,
                 **kwargs,
             )
         )
