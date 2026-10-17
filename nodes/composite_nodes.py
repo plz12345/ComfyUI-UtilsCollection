@@ -2181,11 +2181,12 @@ class UC_CreateBoundingBoxes(io.ComfyNode):
                 ),
                 io.Combo.Input(
                     "input_coord_space",
-                    options=["normalized_1000", "abs_centralized"],
-                    default="normalized_1000",
+                    options=["gemini_0_to_1000", "moss_centered_pixels"],
+                    default="gemini_0_to_1000",
                     tooltip=(
-                        "Coordinate space for incoming MOSS-Image JSON bboxes: normalized_1000 for Gemini's native "
-                        "0 to 1000 [ymin, xmin, ymax, xmax] grid, or abs_centralized for centered pixel coordinates."
+                        "Format of incoming JSON bounding boxes connected to bboxes. Keep the default gemini_0_to_1000 "
+                        "when connecting Gemini or VLM layout JSON outputs (which use a 0 to 1000 grid); switch to "
+                        "moss_centered_pixels only when feeding an already-converted MOSS-Image layout prompt."
                     ),
                 ),
                 io.String.Input(
@@ -2206,22 +2207,22 @@ class UC_CreateBoundingBoxes(io.ComfyNode):
                 io.BoundingBox.Output(
                     "bboxes",
                     display_name="bboxes",
-                    tooltip="Pixel-space bounding boxes [{x, y, width, height}, ...] aligned to the configured width and height.",
+                    tooltip="Pixel bounding boxes aligned to the resolved canvas width and height.",
                 ),
                 io.Array.Output(
                     "elements",
                     display_name="elements",
                     tooltip=(
-                        "Prompt layout elements [{type, bbox, desc, text?, color_palette?}, ...] ready to connect to "
-                        "FLUX.3 Layout Prompt (referenced as <obj_1>, <obj_2>, ...) or Build JSON Prompt (Ideogram)."
+                        "Layout elements ready to connect to FLUX.3 Layout Prompt (referenced as <obj_1>, <obj_2>, ...) "
+                        "or Build JSON Prompt (Ideogram)."
                     ),
                 ),
                 io.String.Output(
                     "moss_prompt",
                     display_name="moss_prompt",
                     tooltip=(
-                        "Ready-to-encode MOSS-Image layout JSON string with abs_centralized pixel coordinates aligned "
-                        "to the resolved width and height."
+                        "Ready-to-encode MOSS-Image layout JSON prompt with centered pixel box coordinates aligned "
+                        "to the resolved canvas width and height."
                     ),
                 ),
             ],
@@ -2233,7 +2234,7 @@ class UC_CreateBoundingBoxes(io.ComfyNode):
         cls,
         width: int = 0,
         height: int = 0,
-        input_coord_space: str = "normalized_1000",
+        input_coord_space: str = "gemini_0_to_1000",
         box_data: str = '{"version":1,"boxes":[],"last_incoming":null}',
         background=None,
         bboxes=None,
@@ -2259,8 +2260,8 @@ class UC_MOSSImageBBoxConvert(io.ComfyNode):
             display_name="MOSS-Image BBox Coordinate Convert",
             category="utils/image",
             description=(
-                "Converts Gemini or Create Bounding Boxes 0 to 1000 [ymin, xmin, ymax, xmax] bounding-box coordinates "
-                "into MOSS-Image's abs_centralized pixel layout JSON aligned to the connected image or target width and height."
+                "Converts Gemini layout JSON or Create Bounding Boxes elements into a ready-to-encode MOSS-Image "
+                "layout JSON prompt with centered pixel box coordinates matched to your image or target canvas size."
             ),
             inputs=[
                 io.String.Input(
@@ -2269,8 +2270,8 @@ class UC_MOSSImageBBoxConvert(io.ComfyNode):
                     dynamic_prompts=False,
                     default="",
                     tooltip=(
-                        "MOSS-Image or Ideogram JSON string from Gemini (with 0 to 1000 [ymin, xmin, ymax, xmax] boxes), "
-                        "or a plain summary caption when elements are connected."
+                        "Connect Gemini's structured JSON text output here (or enter a scene summary caption when "
+                        "connecting boxes through the elements input)."
                     ),
                 ),
                 io.Image.Input(
@@ -2301,22 +2302,29 @@ class UC_MOSSImageBBoxConvert(io.ComfyNode):
                 ),
                 io.Combo.Input(
                     "input_coord_space",
-                    options=["normalized_1000", "abs_centralized"],
-                    default="normalized_1000",
-                    tooltip="Coordinate space of the input JSON boxes: normalized_1000 for Gemini's 0 to 1000 [ymin, xmin, ymax, xmax] grid, or abs_centralized for centered pixel coordinates.",
+                    options=["gemini_0_to_1000", "moss_centered_pixels"],
+                    default="gemini_0_to_1000",
+                    tooltip=(
+                        "Format of the incoming JSON boxes in prompt. Keep the default gemini_0_to_1000 when connecting "
+                        "Gemini or VLM layout JSON outputs (which use a 0 to 1000 grid); switch to moss_centered_pixels "
+                        "only when feeding an already-converted MOSS-Image layout prompt."
+                    ),
                 ),
                 io.String.Input(
                     "character_boxes",
                     default="",
                     optional=True,
-                    tooltip="Optional 1-based box numbers (such as '1, 3') to label as character when boxes come from elements without explicit character labels.",
+                    tooltip=(
+                        "Optional 1-based box numbers (such as '1, 3') to mark as character boxes when boxes come from "
+                        "Create Bounding Boxes elements or Ideogram JSON. Leave empty when feeding Gemini MOSS JSON."
+                    ),
                 ),
             ],
             outputs=[
                 io.String.Output(
                     "moss_prompt",
                     display_name="moss_prompt",
-                    tooltip="Ready-to-encode MOSS-Image layout JSON string with abs_centralized yxyx pixel coordinates.",
+                    tooltip="Ready-to-encode MOSS-Image layout JSON prompt with centered pixel box coordinates. Connect directly to your MOSS-Image text encoder.",
                 ),
             ],
         )
@@ -2327,7 +2335,7 @@ class UC_MOSSImageBBoxConvert(io.ComfyNode):
         prompt: str = "",
         width: int = 0,
         height: int = 0,
-        input_coord_space: str = "normalized_1000",
+        input_coord_space: str = "gemini_0_to_1000",
         character_boxes: str = "",
         image=None,
         elements=None,

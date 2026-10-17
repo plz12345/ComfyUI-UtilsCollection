@@ -1990,7 +1990,7 @@ class UC_CompositeNodesGuide(io.ComfyNode):
                 "- `UC_MediaPipeFaceCompositeOptions`: supplies options for direct source-to-target face compositing.\n"
                 "- `UC_MediaPipeFaceComposite`: composites the largest detected source face into the largest detected target face.\n"
                 "- `UC_CreateBoundingBoxes`: interactive Nodes 1.0 bounding-box canvas editor outputting `preview`, pixel `bboxes`, layout `elements`, and `moss_prompt` for `FLUX.3 Layout Prompt`, `Build JSON Prompt (Ideogram)`, and `MOSS-Image`.\n"
-                "- `UC_MOSSImageBBoxConvert`: passthrough converter that maps Gemini's 0 to 1000 `[ymin, xmin, ymax, xmax]` layout JSON (or `Create Bounding Boxes` elements) into `MOSS-Image`'s `abs_centralized` pixel layout JSON."
+                "- `UC_MOSSImageBBoxConvert`: passthrough converter that maps Gemini's 0 to 1000 layout JSON (or `Create Bounding Boxes` elements) into a ready-to-encode `MOSS-Image` centered-pixel layout JSON prompt."
             ),
             "model_inputs": (
                 "## Model inputs and defaults\n\n"
@@ -2098,7 +2098,7 @@ class UC_CompositeNodesGuide(io.ComfyNode):
             ),
             "create_bounding_boxes": (
                 "## Create Bounding Boxes (Nodes 1.0)\n\n"
-                "`UC_CreateBoundingBoxes` provides a Nodes 1.0 canvas editor that outputs `preview`, pixel-space `bboxes`, normalized `elements`, and `moss_prompt` (`MOSS-Image` `abs_centralized` pixel layout JSON). Leaving `width` and `height` at `0` automatically uses the connected `background` image dimensions (`1024x1024` fallback when disconnected).\n\n"
+                "`UC_CreateBoundingBoxes` provides a Nodes 1.0 canvas editor that outputs `preview`, pixel-space `bboxes`, normalized `elements`, and `moss_prompt` (a ready-to-encode `MOSS-Image` centered-pixel layout JSON prompt). Leaving `width` and `height` at `0` automatically uses the connected `background` image dimensions (`1024x1024` fallback when disconnected).\n\n"
                 "- Click and drag on empty canvas space (or Shift+drag over existing boxes) to draw a new bounding box, or use `+ Object Box` and `+ Text Box`.\n"
                 "- Click a box to select it, drag inside to move it, or drag its eight handles to resize it.\n"
                 "- Each row in the box list corresponds to `<obj_1>`, `<obj_2>`, and so on from background to foreground. Reorder boxes with the row arrow buttons, toggle between `Obj` and `Text`, edit the description or rendered text, open the docked `PaintColorPicker` swatch to assign an optional prompt color (boxes default to outline-only so no color is sent to the prompt unless set; right-click, Shift+click, or press `Clear color (outline only)` to clear), and lock or exclude individual boxes.\n"

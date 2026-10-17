@@ -41,7 +41,7 @@ DESCRIPTIONS = {
     "UC_MediaPipeFaceCompositeOptions": "Configures landmark regions and blending options for MediaPipe face compositing.",
     "UC_MediaPipeFaceComposite": "Detects face landmarks and composites selected facial regions between images.",
     "UC_CreateBoundingBoxes": "Draws and edits labeled bounding boxes on a Nodes 1.0 canvas for FLUX.3 Layout Prompt, Ideogram JSON prompts, MOSS-Image layout prompts, and pixel bounding-box workflows.",
-    "UC_MOSSImageBBoxConvert": "Converts Gemini or Create Bounding Boxes 0 to 1000 [ymin, xmin, ymax, xmax] bounding-box coordinates into MOSS-Image abs_centralized pixel layout JSON aligned to the connected image or target width and height.",
+    "UC_MOSSImageBBoxConvert": "Converts Gemini layout JSON or Create Bounding Boxes elements into a ready-to-encode MOSS-Image layout JSON prompt with centered pixel box coordinates matched to your image or target canvas size.",
     "UC_SystemMessagePresets": "Provides reusable system-message presets for image prompting.",
     "UC_SystemMessageVideoPresets": "Provides reusable system-message presets for video prompting.",
     "UC_InstructPromptPresets": "Provides reusable image instruction prompt presets.",

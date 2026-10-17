@@ -3715,7 +3715,8 @@ def test_create_bounding_boxes_nodes1_elements_and_flux3_layout_compatibility(mo
     inputs_by_id = {inp.id: inp for inp in schema.inputs}
     assert inputs_by_id["width"].default == 0
     assert inputs_by_id["height"].default == 0
-    assert inputs_by_id["input_coord_space"].default == "normalized_1000"
+    assert inputs_by_id["input_coord_space"].default == "gemini_0_to_1000"
+    assert inputs_by_id["input_coord_space"].options == ["gemini_0_to_1000", "moss_centered_pixels"]
 
     box_data = json.dumps({
         "version": 1,
@@ -3806,7 +3807,7 @@ def test_create_bounding_boxes_nodes1_elements_and_flux3_layout_compatibility(mo
     coerced_out = node.execute(
         width=1000,
         height=500,
-        input_coord_space="abs_centralized",
+        input_coord_space="moss_centered_pixels",
         box_data='{"version":1,"boxes":[],"last_incoming":null}',
         bboxes=moss_json,
     )
@@ -3838,6 +3839,6 @@ def test_create_bounding_boxes_nodes1_elements_and_flux3_layout_compatibility(mo
     converted_moss_json = composite_nodes.UC_MOSSImageBBoxConvert.execute(
         prompt=gemini_native_json,
         image=torch.zeros(1, 500, 1000, 3),
-        input_coord_space="normalized_1000",
+        input_coord_space="gemini_0_to_1000",
     ).args[0]
     assert converted_moss_json == moss_json

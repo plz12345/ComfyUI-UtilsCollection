@@ -900,7 +900,7 @@ def _extract_incoming_summary_and_labels(data) -> tuple[str, list[str]]:
     return caption, labels
 
 
-def _coerce_incoming_bboxes_input(data, width: int, height: int, input_coord_space: str = "normalized_1000"):
+def _coerce_incoming_bboxes_input(data, width: int, height: int, input_coord_space: str = "gemini_0_to_1000"):
     if data is None:
         return None
     parsed = data
@@ -922,7 +922,7 @@ def _coerce_incoming_bboxes_input(data, width: int, height: int, input_coord_spa
     items = parsed.get("items")
     if not isinstance(items, list):
         return parsed
-    mode = str(input_coord_space or "normalized_1000").lower()
+    mode = str(input_coord_space or "gemini_0_to_1000").lower()
     w = max(1, int(width or 1024))
     h = max(1, int(height or 1024))
     elements = []
@@ -934,7 +934,7 @@ def _coerce_incoming_bboxes_input(data, width: int, height: int, input_coord_spa
             continue
         y0, x0, y1, x1 = (float(v) for v in bbox)
         has_negative = any(v < 0 for v in (y0, x0, y1, x1))
-        use_centralized = mode == "abs_centralized" or has_negative
+        use_centralized = mode in ("moss_centered_pixels", "abs_centralized") or has_negative
         if use_centralized:
             ymin = max(0.0, min(1000.0, (y0 + (h // 2)) * 1000.0 / h))
             xmin = max(0.0, min(1000.0, (x0 + (w // 2)) * 1000.0 / w))
@@ -970,7 +970,7 @@ def build_moss_image_layout_prompt(
     width: int = 0,
     height: int = 0,
     image=None,
-    input_coord_space: str = "normalized_1000",
+    input_coord_space: str = "gemini_0_to_1000",
     character_boxes: str = "",
     item_labels: list[str] | None = None,
 ) -> str:
@@ -1041,7 +1041,7 @@ def execute_create_bounding_boxes(
     box_data: str = '{"version":1,"boxes":[],"last_incoming":null}',
     background=None,
     bboxes=None,
-    input_coord_space: str = "normalized_1000",
+    input_coord_space: str = "gemini_0_to_1000",
 ):
     from comfy_extras import nodes_bounding_boxes as core_bboxes
 
