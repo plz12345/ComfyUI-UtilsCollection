@@ -1800,7 +1800,14 @@ def test_moss_image_edit_patcher_end_to_end():
 
         def add_object_patch(self, name: str, obj):
             self.object_patches[name] = obj
-            setattr(self.model, name, obj)
+            if "." not in name:
+                setattr(self.model, name, obj)
+
+        def apply_layer_patches(self):
+            for idx, layer in enumerate(self.diffusion.layers):
+                key = f"diffusion_model.layers.{idx}.forward"
+                if key in self.object_patches:
+                    layer.forward = self.object_patches[key]
 
         def get_model_object(self, name: str):
             if name == "diffusion_model":
@@ -1853,6 +1860,23 @@ def test_moss_image_edit_patcher_end_to_end():
     # Verify extra_conds patch extracts reference_latents from conditioning
     extra = patched_edit.model.extra_conds(reference_latents=[ref_tensor])
     assert "ref_latents" in extra
+    assert patcher_helpers._embed_moss_rope_ids(dit, ids_aligned).ndim == 6
+    for idx in range(len(dit.layers)):
+        assert f"diffusion_model.layers.{idx}.forward" in patched_edit.object_patches
+
+    old_training = comfy.model_management.in_training
+    comfy.model_management.in_training = False
+    try:
+        x_inplace = torch.randn(2, 8, 64)
+        ptr_before = x_inplace.data_ptr()
+        res_inplace = patcher_helpers._moss_gated_residual(
+            x_inplace,
+            torch.ones_like(x_inplace),
+            torch.full((2, 1, 64), 0.5),
+        )
+        assert res_inplace.data_ptr() == ptr_before
+    finally:
+        comfy.model_management.in_training = old_training
 
     x = torch.randn(2, 16, 4, 4)
     timesteps = torch.tensor([0.5, 0.5])
@@ -1864,6 +1888,7 @@ def test_moss_image_edit_patcher_end_to_end():
         baseline_out = dit(x, timesteps, context, transformer_options={"cond_or_uncond": [0, 1]})
 
         # Zero strength & no mask matches baseline exactly
+        patched_zero.apply_layer_patches()
         zero_opts = {
             "wrappers": patched_zero.model_options["wrappers"],
             "cond_or_uncond": [0, 1],
@@ -1891,6 +1916,7 @@ def test_moss_image_edit_patcher_end_to_end():
         assert not torch.allclose(captured_noise[0][:, :, 2:, 2:], x[:, :, 2:, 2:], atol=1e-4)
 
         # Diffusion wrapper applies 42-layer reference KV attention, structure guidance, and exact unmasked preservation
+        patched_edit.apply_layer_patches()
         edit_opts = {
             "wrappers": patched_edit.model_options["wrappers"],
             "cond_or_uncond": [0, 1],
@@ -1905,6 +1931,7 @@ def test_moss_image_edit_patcher_end_to_end():
         assert torch.allclose(x0_edited[:, :, 2:, 2:], ref_tensor.expand_as(x)[:, :, 2:, 2:], atol=1e-4)
 
         # Subject reference mode with conditioning ref_latents (even at different spatial size 3x3) runs cleanly
+        patched_subject.apply_layer_patches()
         subject_opts = {
             "wrappers": patched_subject.model_options["wrappers"],
             "cond_or_uncond": [0, 1],

@@ -3245,24 +3245,6 @@ def _unpack_reference_latents_list(
     return resolved
 
 
-def _make_moss_uncond_skip_block_replace(cond_or_uncond: Sequence[int]):
-    cond_flags = tuple(int(flag) for flag in cond_or_uncond)
-    all_uncond = bool(cond_flags) and all(flag == 1 for flag in cond_flags)
-
-    def block_replace(args: dict[str, Any], extra_args: dict[str, Any]) -> dict[str, Any]:
-        if all_uncond:
-            return {"img": args["img"]}
-        out = extra_args["original_block"](args)["img"]
-        if out.shape[0] == len(cond_flags) and any(flag == 1 for flag in cond_flags):
-            out = out.clone()
-            for idx, flag in enumerate(cond_flags):
-                if flag == 1:
-                    out[idx] = args["img"][idx]
-        return {"img": out}
-
-    return block_replace
-
-
 def _moss_apply_qk_norm_and_rope(
     block: Any,
     q: torch.Tensor,
@@ -3279,7 +3261,7 @@ def _moss_apply_qk_norm_and_rope(
         and hasattr(comfy, "quant_ops")
         and hasattr(comfy.quant_ops, "ck")
         and hasattr(comfy.quant_ops.ck, "rms_rope_split_half")
-        and pe.ndim == 5
+        and pe.ndim == 6
     )
     if use_ck:
         q_scale, _, q_stream = comfy.ops.cast_bias_weight(block.q_norm, q_v, offloadable=True)
@@ -3336,6 +3318,14 @@ def _moss_project_qkv(block: Any, y: torch.Tensor) -> tuple[torch.Tensor, torch.
     return block.proj["q"](y), block.proj["k"](y), block.proj["v"](y)
 
 
+def _moss_gated_residual(x: torch.Tensor, y: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
+    if moss_image_model is not None and hasattr(moss_image_model, "gated_residual"):
+        return moss_image_model.gated_residual(x, y, gate)
+    if getattr(comfy.model_management, "in_training", False):
+        return torch.addcmul(x, y, gate)
+    return x.addcmul_(y, gate)
+
+
 def _moss_ffn_residual(
     block: Any,
     x: torch.Tensor,
@@ -3344,86 +3334,106 @@ def _moss_ffn_residual(
     gate_f: torch.Tensor,
 ) -> torch.Tensor:
     y = _moss_modulated_rms_norm(block.norm2, x, scale_f, shift_f)
+    if hasattr(comfy, "ops") and hasattr(comfy.ops, "linear_input_act"):
+        out = comfy.ops.linear_input_act(block.proj["ffn_down"], block.proj["ffn_up_gate"](y), "situ")
+        return _moss_gated_residual(x, out, gate_f)
     hidden, gate = block.proj["ffn_up_gate"](y).chunk(2, dim=-1)
     out = block.proj["ffn_down"](torch.tanh(gate / 4.0) * torch.sigmoid(gate) * torch.tanh(hidden / 25.0))
-    return torch.addcmul(x, out, gate_f * 100.0)
+    return _moss_gated_residual(x, out, gate_f * 100.0)
 
 
-def _make_moss_edit_block_replace(
+class MOSSImageEditExecutionState:
+    def __init__(self) -> None:
+        self.step: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+            "moss_image_edit_step",
+            default=None,
+        )
+        self.sampler_latent_image: torch.Tensor | None = None
+        self.sampler_denoise_mask: torch.Tensor | None = None
+
+
+def make_moss_edit_layer_forward(
+    layer_idx: int,
     block: Any,
-    ref_entries: list[dict[str, Any]],
-    mod_ref: tuple[torch.Tensor, ...],
-    visual_tokens: int,
-    ref_blend_weights: torch.Tensor,
-    ref_kv_scale: float,
-    attn_spatial_mask: torch.Tensor | None,
-    is_uncond_skip: bool,
-    cond_or_uncond: Sequence[int],
+    orig_forward: Any,
+    exec_state: MOSSImageEditExecutionState,
 ):
-    cond_flags = tuple(int(flag) for flag in cond_or_uncond)
-    all_uncond = bool(cond_flags) and all(flag == 1 for flag in cond_flags)
+    def _layer_forward(
+        self,
+        x: torch.Tensor,
+        mod: tuple[torch.Tensor, ...],
+        pe: torch.Tensor,
+        transformer_options: dict[str, Any] = {},
+    ) -> torch.Tensor:
+        step_state = exec_state.step.get()
+        if step_state is None:
+            return orig_forward(x, mod, pe, transformer_options)
 
-    def block_replace(args: dict[str, Any], extra_args: dict[str, Any]) -> dict[str, Any]:
-        x_in = args["img"]
-        if is_uncond_skip and all_uncond:
-            return {"img": x_in}
-        if not hasattr(block, "norm1") or not hasattr(block, "proj"):
-            return extra_args["original_block"](args)
+        is_uncond_skip = layer_idx == step_state["uncond_skip_layer"] and step_state["has_uncond"]
+        if is_uncond_skip and step_state["all_uncond"]:
+            return x
 
-        mod = args["mod"]
-        pe = args["pe"]
-        t_opts = args.get("transformer_options", {})
-        heads = int(getattr(block, "num_heads", 24))
+        uncond_skip_buf: torch.Tensor | None = step_state.get("uncond_skip_buf") if is_uncond_skip else None
+        uncond_indices: tuple[int, ...] = step_state.get("uncond_indices", ())
+        if uncond_skip_buf is not None and uncond_skip_buf.shape == x.shape:
+            uncond_skip_buf.copy_(x)
+        else:
+            uncond_skip_buf = None
 
+        ref_entries: list[dict[str, Any]] = step_state["ref_entries"]
+        if not ref_entries or not hasattr(self, "norm1") or not hasattr(self, "proj"):
+            out = orig_forward(x, mod, pe, transformer_options)
+            if uncond_skip_buf is not None:
+                for idx in uncond_indices:
+                    out[idx].copy_(uncond_skip_buf[idx])
+            return out
+
+        heads = int(getattr(self, "num_heads", 24))
+        mod_ref = step_state["mod_ref"]
         ref_shift_a, ref_scale_a, ref_gate_a, ref_shift_f, ref_scale_f, ref_gate_f = mod_ref
         k_ref_cross_list: list[torch.Tensor] = []
         v_ref_list: list[torch.Tensor] = []
-        kv_scale = float(ref_kv_scale)
+        kv_scale = float(step_state["ref_kv_scale"])
 
         for entry in ref_entries:
             x_ref = entry["x"]
-            y_ref = _moss_modulated_rms_norm(block.norm1, x_ref, ref_scale_a, ref_shift_a)
-            q_ref, k_ref, v_ref = _moss_project_qkv(block, y_ref)
-            q_ref_self, k_ref_self = _moss_apply_qk_norm_and_rope(block, q_ref, k_ref, entry["pe_self"], heads)
-            _, k_ref_cross = _moss_apply_qk_norm_and_rope(block, q_ref, k_ref, entry["pe_cross"], heads)
+            y_ref = _moss_modulated_rms_norm(self.norm1, x_ref, ref_scale_a, ref_shift_a)
+            q_ref, k_ref, v_ref = _moss_project_qkv(self, y_ref)
+            q_ref_self, k_ref_self = _moss_apply_qk_norm_and_rope(self, q_ref, k_ref, entry["pe_self"], heads)
+            _, k_ref_cross = _moss_apply_qk_norm_and_rope(self, q_ref, k_ref, entry["pe_cross"], heads)
             if kv_scale != 1.0:
                 k_ref_cross = k_ref_cross * kv_scale
             k_ref_cross_list.append(k_ref_cross)
             v_ref_list.append(v_ref)
 
-            out_ref = _moss_run_attention(block, q_ref_self, k_ref_self, v_ref, heads, t_opts)
-            x_ref_next = torch.addcmul(x_ref, block.proj["o"](out_ref), ref_gate_a)
-            entry["x"] = _moss_ffn_residual(block, x_ref_next, ref_scale_f, ref_shift_f, ref_gate_f)
+            out_ref = _moss_run_attention(self, q_ref_self, k_ref_self, v_ref, heads, transformer_options)
+            x_ref = _moss_gated_residual(x_ref, self.proj["o"](out_ref), ref_gate_a)
+            entry["x"] = _moss_ffn_residual(self, x_ref, ref_scale_f, ref_shift_f, ref_gate_f)
 
         shift_a, scale_a, gate_a, shift_f, scale_f, gate_f = mod
-        y_main = _moss_modulated_rms_norm(block.norm1, x_in, scale_a, shift_a)
-        q_main, k_main, v_main = _moss_project_qkv(block, y_main)
-        q_main_r, k_main_r = _moss_apply_qk_norm_and_rope(block, q_main, k_main, pe, heads)
-        out_main = _moss_run_attention(block, q_main_r, k_main_r, v_main, heads, t_opts)
+        y_main = _moss_modulated_rms_norm(self.norm1, x, scale_a, shift_a)
+        q_main, k_main, v_main = _moss_project_qkv(self, y_main)
+        q_main_r, k_main_r = _moss_apply_qk_norm_and_rope(self, q_main, k_main, pe, heads)
+        out_main = _moss_run_attention(self, q_main_r, k_main_r, v_main, heads, transformer_options)
 
-        vis_n = min(int(visual_tokens), int(q_main_r.shape[1]))
+        vis_n = min(int(step_state["visual_tokens"]), int(q_main_r.shape[1]))
         if vis_n > 0 and k_ref_cross_list:
             q_vis = q_main_r[:, :vis_n]
             k_joint = torch.cat([k_main_r, *k_ref_cross_list], dim=1)
             v_joint = torch.cat([v_main, *v_ref_list], dim=1)
-            out_vis_ref = _moss_run_attention(block, q_vis, k_joint, v_joint, heads, t_opts)
-            blend = ref_blend_weights.to(device=out_main.device, dtype=out_main.dtype)
-            if attn_spatial_mask is not None and attn_spatial_mask.shape[1] == vis_n:
-                blend = blend * attn_spatial_mask.to(device=out_main.device, dtype=out_main.dtype)
-            out_vis = torch.lerp(out_main[:, :vis_n], out_vis_ref, blend)
+            out_vis_ref = _moss_run_attention(self, q_vis, k_joint, v_joint, heads, transformer_options)
+            out_vis = torch.lerp(out_main[:, :vis_n], out_vis_ref, step_state["effective_blend"])
             out_main = torch.cat((out_vis, out_main[:, vis_n:]), dim=1)
 
-        x_out = torch.addcmul(x_in, block.proj["o"](out_main), gate_a)
-        x_out = _moss_ffn_residual(block, x_out, scale_f, shift_f, gate_f)
+        x = _moss_gated_residual(x, self.proj["o"](out_main), gate_a)
+        x = _moss_ffn_residual(self, x, scale_f, shift_f, gate_f)
 
-        if is_uncond_skip and x_out.shape[0] == len(cond_flags) and any(flag == 1 for flag in cond_flags):
-            x_out = x_out.clone()
-            for idx, flag in enumerate(cond_flags):
-                if flag == 1:
-                    x_out[idx] = x_in[idx]
-        return {"img": x_out}
+        if uncond_skip_buf is not None:
+            for idx in uncond_indices:
+                x[idx].copy_(uncond_skip_buf[idx])
+        return x
 
-    return block_replace
+    return types.MethodType(_layer_forward, block)
 
 
 def _extract_sigma_tensor(
@@ -3448,12 +3458,13 @@ def _extract_sigma_tensor(
 
 
 def _make_moss_edit_outer_sample_wrapper(
-    state: dict[str, Any],
+    exec_state: MOSSImageEditExecutionState,
     node_ref_latents: list[torch.Tensor],
     node_mask: torch.Tensor | None,
     noise_anchor: float,
     structure_retention: float,
     lowpass_kernel: int,
+    process_in: Any = None,
 ):
     def outer_sample_wrapper(
         executor,
@@ -3467,19 +3478,20 @@ def _make_moss_edit_outer_sample_wrapper(
         seed=None,
         **kwargs,
     ):
-        state["sampler_latent_image"] = None
-        state["sampler_denoise_mask"] = None
+        exec_state.sampler_latent_image = None
+        exec_state.sampler_denoise_mask = None
         if torch.is_tensor(latent_image) and latent_image.ndim == 4:
             if float(latent_image.detach().abs().max().item()) > 1e-5:
-                state["sampler_latent_image"] = latent_image.detach().clone()
+                lat_processed = process_in(latent_image) if callable(process_in) else latent_image
+                exec_state.sampler_latent_image = lat_processed.detach().clone()
         if torch.is_tensor(denoise_mask):
-            state["sampler_denoise_mask"] = denoise_mask.detach().clone()
+            exec_state.sampler_denoise_mask = denoise_mask.detach().clone()
 
         primary_ref = None
         if node_ref_latents:
             primary_ref = node_ref_latents[0]
-        elif state["sampler_latent_image"] is not None:
-            primary_ref = state["sampler_latent_image"]
+        elif exec_state.sampler_latent_image is not None:
+            primary_ref = exec_state.sampler_latent_image
 
         anchor_weight = float(noise_anchor) * float(structure_retention)
         if (
@@ -3499,7 +3511,7 @@ def _make_moss_edit_outer_sample_wrapper(
             rho = min(0.65, max(0.0, anchor_weight))
             noise_f32 = noise.to(torch.float32)
             anchored = math.sqrt(max(0.0, 1.0 - rho * rho)) * noise_f32 + rho * ref_norm
-            active_mask = node_mask if node_mask is not None else state["sampler_denoise_mask"]
+            active_mask = node_mask if node_mask is not None else exec_state.sampler_denoise_mask
             if active_mask is not None:
                 m = _prepare_moss_mask(
                     active_mask,
@@ -3526,15 +3538,15 @@ def _make_moss_edit_outer_sample_wrapper(
                 **kwargs,
             )
         finally:
-            state["sampler_latent_image"] = None
-            state["sampler_denoise_mask"] = None
+            exec_state.sampler_latent_image = None
+            exec_state.sampler_denoise_mask = None
 
     return outer_sample_wrapper
 
 
 def _make_moss_edit_diffusion_wrapper(
     diffusion_model: Any,
-    state: dict[str, Any],
+    exec_state: MOSSImageEditExecutionState,
     node_ref_latents: list[torch.Tensor],
     node_mask: torch.Tensor | None,
     rope_mode: str,
@@ -3560,9 +3572,25 @@ def _make_moss_edit_diffusion_wrapper(
             return executor(x, timestep, context, transformer_options, **kwargs)
 
         local_options = transformer_options.copy() if isinstance(transformer_options, dict) else {}
-        cond_or_uncond = tuple(int(flag) for flag in local_options.get("cond_or_uncond", ()))
+        cond_flags = tuple(int(flag) for flag in local_options.get("cond_or_uncond", ()))
+        has_uncond = 1 in cond_flags
+        all_uncond = bool(cond_flags) and all(flag == 1 for flag in cond_flags)
         bsz, _, frame_h, frame_w = x.shape
         device, dtype = x.device, x.dtype
+        text_len = int(context.shape[1]) if torch.is_tensor(context) and context.ndim >= 2 else 0
+        visual_tokens = frame_h * frame_w
+
+        uncond_indices: list[int] = []
+        if has_uncond and not all_uncond and len(cond_flags) > 0 and bsz % len(cond_flags) == 0:
+            per_flag = bsz // len(cond_flags)
+            for flag_idx, flag in enumerate(cond_flags):
+                if flag == 1:
+                    uncond_indices.extend(range(flag_idx * per_flag, (flag_idx + 1) * per_flag))
+
+        model_dim = int(getattr(diffusion_model, "dim", 3072))
+        uncond_skip_buf: torch.Tensor | None = None
+        if int(uncond_skip_layer) >= 0 and uncond_indices:
+            uncond_skip_buf = torch.empty((bsz, visual_tokens + text_len, model_dim), device=device, dtype=dtype)
 
         raw_refs: list[torch.Tensor] = []
         if node_ref_latents:
@@ -3574,26 +3602,33 @@ def _make_moss_edit_diffusion_wrapper(
                     raw_refs.append(r)
         elif torch.is_tensor(cond_refs):
             raw_refs.append(cond_refs)
-        if not raw_refs and torch.is_tensor(state.get("sampler_latent_image")):
-            raw_refs.append(state["sampler_latent_image"])
+        if not raw_refs and torch.is_tensor(exec_state.sampler_latent_image):
+            raw_refs.append(exec_state.sampler_latent_image)
 
         resolved_refs = _unpack_reference_latents_list(raw_refs, bsz, device, dtype)
 
         if not resolved_refs or (float(strength) <= 0.0 and float(structure_retention) <= 0.0 and node_mask is None):
-            if int(uncond_skip_layer) >= 0 and 1 in cond_or_uncond:
-                patches_replace = dict(local_options.get("patches_replace", {}))
-                dit_replace = dict(patches_replace.get("dit", {}))
-                block_key = ("single_block", int(uncond_skip_layer))
-                if block_key not in dit_replace:
-                    dit_replace[block_key] = _make_moss_uncond_skip_block_replace(cond_or_uncond)
-                    patches_replace["dit"] = dit_replace
-                    local_options["patches_replace"] = patches_replace
+            if int(uncond_skip_layer) >= 0 and has_uncond:
+                skip_state = {
+                    "ref_entries": [],
+                    "mod_ref": (),
+                    "visual_tokens": visual_tokens,
+                    "effective_blend": None,
+                    "ref_kv_scale": float(ref_kv_scale),
+                    "uncond_skip_layer": int(uncond_skip_layer),
+                    "has_uncond": has_uncond,
+                    "all_uncond": all_uncond,
+                    "uncond_indices": tuple(uncond_indices),
+                    "uncond_skip_buf": uncond_skip_buf,
+                }
+                token = exec_state.step.set(skip_state)
+                try:
+                    return executor(x, timestep, context, local_options, **kwargs)
+                finally:
+                    exec_state.step.reset(token)
             return executor(x, timestep, context, local_options, **kwargs)
 
-        text_len = int(context.shape[1]) if torch.is_tensor(context) and context.ndim >= 2 else 0
-        visual_tokens = frame_h * frame_w
-
-        raw_mask = node_mask if node_mask is not None else state.get("sampler_denoise_mask")
+        raw_mask = node_mask if node_mask is not None else exec_state.sampler_denoise_mask
         spatial_mask = _prepare_moss_mask(raw_mask, bsz, frame_h, frame_w, device, torch.float32)
         attn_spatial_mask: torch.Tensor | None = None
         if spatial_mask is not None:
@@ -3607,6 +3642,7 @@ def _make_moss_edit_diffusion_wrapper(
             and hasattr(diffusion_model, "time_embedding")
             and hasattr(diffusion_model, "shared_block_modulation")
         )
+        step_state: dict[str, Any] | None = None
         if can_run_ref_kv:
             t_zero = torch.zeros((bsz,), device=device, dtype=torch.float32)
             if moss_image_model is not None and hasattr(moss_image_model, "timestep_embedding"):
@@ -3624,7 +3660,7 @@ def _make_moss_edit_diffusion_wrapper(
             ref_entries: list[dict[str, Any]] = []
             for idx, ref_lat in enumerate(resolved_refs):
                 ref_h, ref_w = int(ref_lat.shape[-2]), int(ref_lat.shape[-1])
-                x_ref_tokens = diffusion_model.video_embedder(ref_lat.flatten(2).transpose(1, 2))
+                x_ref_tokens = diffusion_model.video_embedder(ref_lat.flatten(2).transpose(1, 2)).contiguous()
                 ids_self = build_moss_reference_rope_ids(
                     target_h=frame_h,
                     target_w=frame_w,
@@ -3657,41 +3693,49 @@ def _make_moss_edit_diffusion_wrapper(
 
             base_blend = min(1.0, max(0.0, float(strength) * 0.65))
             blend_per_batch = torch.full((bsz, 1, 1), base_blend, device=device, dtype=torch.float32)
-            if len(cond_or_uncond) > 0 and bsz % len(cond_or_uncond) == 0:
-                per_flag = bsz // len(cond_or_uncond)
-                for flag_idx, flag in enumerate(cond_or_uncond):
+            if len(cond_flags) > 0 and bsz % len(cond_flags) == 0:
+                per_flag = bsz // len(cond_flags)
+                for flag_idx, flag in enumerate(cond_flags):
                     if int(flag) == 1:
                         blend_per_batch[flag_idx * per_flag : (flag_idx + 1) * per_flag] = base_blend * 0.35
 
-            patches_replace = dict(local_options.get("patches_replace", {}))
-            dit_replace = dict(patches_replace.get("dit", {}))
-            for layer_idx, block in enumerate(diffusion_model.layers):
-                block_key = ("single_block", layer_idx)
-                if block_key not in dit_replace:
-                    is_skip = int(uncond_skip_layer) == layer_idx and (1 in cond_or_uncond)
-                    dit_replace[block_key] = _make_moss_edit_block_replace(
-                        block=block,
-                        ref_entries=ref_entries,
-                        mod_ref=mod_ref,
-                        visual_tokens=visual_tokens,
-                        ref_blend_weights=blend_per_batch,
-                        ref_kv_scale=ref_kv_scale,
-                        attn_spatial_mask=attn_spatial_mask,
-                        is_uncond_skip=is_skip,
-                        cond_or_uncond=cond_or_uncond,
-                    )
-            patches_replace["dit"] = dit_replace
-            local_options["patches_replace"] = patches_replace
-        elif int(uncond_skip_layer) >= 0 and 1 in cond_or_uncond:
-            patches_replace = dict(local_options.get("patches_replace", {}))
-            dit_replace = dict(patches_replace.get("dit", {}))
-            block_key = ("single_block", int(uncond_skip_layer))
-            if block_key not in dit_replace:
-                dit_replace[block_key] = _make_moss_uncond_skip_block_replace(cond_or_uncond)
-                patches_replace["dit"] = dit_replace
-                local_options["patches_replace"] = patches_replace
+            effective_blend = blend_per_batch
+            if attn_spatial_mask is not None and attn_spatial_mask.shape[1] == visual_tokens:
+                effective_blend = effective_blend * attn_spatial_mask
+            effective_blend = effective_blend.to(device=device, dtype=dtype).contiguous()
 
-        v_pred = executor(x, timestep, context, local_options, **kwargs)
+            step_state = {
+                "ref_entries": ref_entries,
+                "mod_ref": mod_ref,
+                "visual_tokens": visual_tokens,
+                "effective_blend": effective_blend,
+                "ref_kv_scale": float(ref_kv_scale),
+                "uncond_skip_layer": int(uncond_skip_layer),
+                "has_uncond": has_uncond,
+                "all_uncond": all_uncond,
+                "uncond_indices": tuple(uncond_indices),
+                "uncond_skip_buf": uncond_skip_buf,
+            }
+        elif int(uncond_skip_layer) >= 0 and has_uncond:
+            step_state = {
+                "ref_entries": [],
+                "mod_ref": (),
+                "visual_tokens": visual_tokens,
+                "effective_blend": None,
+                "ref_kv_scale": float(ref_kv_scale),
+                "uncond_skip_layer": int(uncond_skip_layer),
+                "has_uncond": has_uncond,
+                "all_uncond": all_uncond,
+                "uncond_indices": tuple(uncond_indices),
+                "uncond_skip_buf": uncond_skip_buf,
+            }
+
+        token = exec_state.step.set(step_state) if step_state is not None else None
+        try:
+            v_pred = executor(x, timestep, context, local_options, **kwargs)
+        finally:
+            if token is not None:
+                exec_state.step.reset(token)
 
         sigma_vec = _extract_sigma_tensor(sigma_source, bsz, device, torch.float32)
         if torch.all(sigma_vec <= 1e-4):
@@ -3722,11 +3766,11 @@ def _make_moss_edit_diffusion_wrapper(
                 x0_pred = x0_pred + w_struct * struct_delta
 
             uncond_anchor = float(uncond_ref_anchor) * float(structure_retention)
-            if uncond_anchor > 0.0 and len(cond_or_uncond) > 0 and 1 in cond_or_uncond and bsz % len(cond_or_uncond) == 0:
-                per_flag = bsz // len(cond_or_uncond)
+            if uncond_anchor > 0.0 and len(cond_flags) > 0 and has_uncond and bsz % len(cond_flags) == 0:
+                per_flag = bsz // len(cond_flags)
                 w_uncond = (uncond_anchor * sigma_factor).clamp(0.0, 0.65)
                 ref_lp_u = lowpass_moss_latent(primary_ref, kernel_size=max(3, int(lowpass_kernel) - 2))
-                for flag_idx, flag in enumerate(cond_or_uncond):
+                for flag_idx, flag in enumerate(cond_flags):
                     if int(flag) == 1:
                         sl = slice(flag_idx * per_flag, (flag_idx + 1) * per_flag)
                         x0_pred[sl] = torch.lerp(x0_pred[sl], ref_lp_u[sl], w_uncond[sl])
@@ -3846,10 +3890,13 @@ def patch_moss_image_edit_model(
                 float(model_sampling.percent_to_sigma(end_percent)),
             )
 
-    state: dict[str, Any] = {
-        "sampler_latent_image": None,
-        "sampler_denoise_mask": None,
-    }
+    exec_state = MOSSImageEditExecutionState()
+    for layer_idx, block in enumerate(getattr(diffusion_model, "layers", ())):
+        patched.add_object_patch(
+            f"diffusion_model.layers.{layer_idx}.forward",
+            make_moss_edit_layer_forward(layer_idx, block, block.forward, exec_state),
+        )
+
     if hasattr(patched, "remove_wrappers_with_key"):
         patched.remove_wrappers_with_key(
             comfy.patcher_extension.WrappersMP.OUTER_SAMPLE,
@@ -3864,12 +3911,13 @@ def patch_moss_image_edit_model(
         comfy.patcher_extension.WrappersMP.OUTER_SAMPLE,
         MOSS_IMAGE_EDIT_OUTER_SAMPLE_WRAPPER_KEY,
         _make_moss_edit_outer_sample_wrapper(
-            state=state,
+            exec_state=exec_state,
             node_ref_latents=node_ref_latents,
             node_mask=inferred_mask,
             noise_anchor=noise_anchor,
             structure_retention=structure_retention,
             lowpass_kernel=lowpass_kernel,
+            process_in=process_in,
         ),
     )
     patched.add_wrapper_with_key(
@@ -3877,7 +3925,7 @@ def patch_moss_image_edit_model(
         MOSS_IMAGE_EDIT_DIFFUSION_WRAPPER_KEY,
         _make_moss_edit_diffusion_wrapper(
             diffusion_model=diffusion_model,
-            state=state,
+            exec_state=exec_state,
             node_ref_latents=node_ref_latents,
             node_mask=inferred_mask,
             rope_mode=rope_mode,
