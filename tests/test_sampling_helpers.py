@@ -429,9 +429,10 @@ def test_node_schema():
 
     # Verify 15.062s clip (361 frames at 24fps) with segment_count=3 produces exactly 3 segments (not 4)
     frames_361 = torch.zeros(361, 32, 32, 3)
+    frames_361[10:] = 1.0
     comp_361 = types.SimpleNamespace(images=frames_361, frame_rate=361 / 15.062, audio=None)
     vid_361 = types.SimpleNamespace(get_components=lambda: comp_361)
-    _, _, _, _, l_361, _, _, tail_361, trail_361 = split_h3_video_components_into_segments(
+    _, _, _, _, l_361, v_361, _, tail_361, trail_361 = split_h3_video_components_into_segments(
         vid_361, megapixels=0.0, segment_count=3, overlap_frames=22, enable_whisper=False, return_trim_metadata=True
     )
     assert len(l_361) == 3
@@ -439,6 +440,15 @@ def test_node_schema():
     assert trail_361 == [0, 0, 1]
     assert [getattr(x, "_uc_overlap_frames", None) for x in l_361] == [0, 22, 22]
     assert [getattr(x, "_uc_padded_frames", None) for x in l_361] == [0, 0, 1]
+    import av
+    src_buf = v_361[0].get_stream_source()
+    src_buf.seek(0)
+    with av.open(src_buf, mode="r") as container:
+        keyframe_indices = [
+            idx for idx, packet in enumerate(container.demux(container.streams.video[0]))
+            if packet.pts is not None and packet.is_keyframe
+        ]
+    assert 0 in keyframe_indices and 10 in keyframe_indices
 
 
 def test_dmad_scheduler_exact_values():

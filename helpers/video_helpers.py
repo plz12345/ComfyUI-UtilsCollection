@@ -553,3 +553,150 @@ def save_keyframe_optimized_video(
 
     return output_path, file, subfolder
 
+
+def encode_keyframe_optimized_video_clip(
+    images: torch.Tensor,
+    fps: float = 24.0,
+    audio: Any = None,
+    codec: str = "auto",
+    gop_size: int = 100,
+    b_frames: int = 0,
+    bitrate_mbps: float = 10.0,
+    crf: float = 19.0,
+):
+    """Re-encode a segment clip with PyAV (h264_nvenc + scene-cut IDR keyframes) and return a VideoFromFile."""
+    import io as pyio
+    from comfy_api.latest import InputImpl, Types
+
+    if images is None or not torch.is_tensor(images) or images.ndim != 4 or images.shape[0] == 0:
+        raise ValueError("encode_keyframe_optimized_video_clip requires a non-empty image batch [B, H, W, C].")
+
+    fps = float(fps)
+    if not math.isfinite(fps) or fps <= 0:
+        fps = 24.0
+
+    batch, height, width, _ = images.shape
+    out_width = width - (width % 2)
+    out_height = height - (height % 2)
+    if out_width <= 0 or out_height <= 0:
+        return InputImpl.VideoFromComponents(
+            Types.VideoComponents(images=images, audio=audio, frame_rate=Fraction(round(fps * 1000), 1000))
+        )
+
+    audio_np = None
+    audio_sample_rate = 32000
+    if audio is not None:
+        waveform = None
+        if isinstance(audio, dict):
+            waveform = audio.get("waveform")
+            audio_sample_rate = int(audio.get("sample_rate", 32000))
+        elif hasattr(audio, "waveform"):
+            waveform = getattr(audio, "waveform")
+            audio_sample_rate = int(getattr(audio, "sample_rate", 32000))
+
+        if torch.is_tensor(waveform) and waveform.numel() > 0:
+            if waveform.ndim == 3:
+                waveform = waveform[0]
+            elif waveform.ndim == 1:
+                waveform = waveform.unsqueeze(0).repeat(2, 1)
+            if waveform.shape[0] == 1:
+                waveform = waveform.repeat(2, 1)
+            elif waveform.shape[0] > 2:
+                waveform = waveform[:2]
+            exact_samples = max(1, round((batch / fps) * audio_sample_rate))
+            waveform = waveform[:, :exact_samples]
+            audio_np = waveform.detach().cpu().to(dtype=torch.float32).contiguous().numpy()
+
+    available = av.codecs_available
+    target_codec = codec.lower() if codec else "auto"
+    if target_codec == "auto":
+        if "h264_nvenc" in available and torch.cuda.is_available() and out_width >= 128 and out_height >= 128:
+            target_codec = "h264_nvenc"
+        else:
+            target_codec = "libx264"
+    elif "nvenc" in target_codec and (out_width < 128 or out_height < 128 or not torch.cuda.is_available()):
+        target_codec = "libx265" if "hevc" in target_codec else "libx264"
+
+    buffer = pyio.BytesIO()
+    container = av.open(buffer, mode="w", format="mp4", options={"movflags": "use_metadata_tags"})
+    try:
+        rate = Fraction(round(fps * 1000), 1000)
+        stream = container.add_stream(target_codec, rate=rate)
+        stream.width = out_width
+        stream.height = out_height
+        stream.pix_fmt = "yuv420p"
+        stream.gop_size = int(gop_size)
+        stream.max_b_frames = int(b_frames)
+
+        if "nvenc" in target_codec:
+            stream.bit_rate = int(bitrate_mbps * 1_000_000)
+            stream.options = {
+                "preset": "p5",
+                "tune": "hq",
+                "forced-idr": "1",
+            }
+        elif "264" in target_codec:
+            stream.options = {
+                "crf": str(int(crf)),
+                "preset": "medium",
+                "x264-params": f"scenecut=40:keyint={int(gop_size)}:min-keyint=1",
+            }
+        elif "265" in target_codec:
+            stream.options = {
+                "crf": str(int(crf)),
+                "preset": "medium",
+                "x265-params": f"no-open-gop=1:keyint={int(gop_size)}",
+            }
+        else:
+            stream.options = {"crf": str(int(crf))}
+
+        a_stream = None
+        if audio_np is not None:
+            a_stream = container.add_stream("aac", rate=audio_sample_rate, layout="stereo")
+
+        prev_thumb = None
+        for i in range(batch):
+            frame_tensor = images[i, :out_height, :out_width, :3]
+            thumb = F.adaptive_avg_pool2d(frame_tensor.permute(2, 0, 1).unsqueeze(0), (16, 16))
+            is_cut = (i == 0)
+            if prev_thumb is not None:
+                if torch.mean(torch.abs(thumb - prev_thumb)).item() > 0.25:
+                    is_cut = True
+            prev_thumb = thumb
+
+            uint8_img = (frame_tensor.clamp(0.0, 1.0) * 255.0).to(dtype=torch.uint8, device="cpu").numpy()
+            frame = av.VideoFrame.from_ndarray(uint8_img, format="rgb24")
+            frame.pts = i
+            if is_cut:
+                frame.pict_type = av.video.frame.PictureType.I
+                frame.key_frame = True
+
+            for packet in stream.encode(frame):
+                container.mux(packet)
+
+        for packet in stream.encode():
+            container.mux(packet)
+
+        if a_stream is not None and audio_np is not None:
+            frame_size = a_stream.codec_context.frame_size or 1024
+            num_samples = audio_np.shape[1]
+            for start in range(0, num_samples, frame_size):
+                chunk = audio_np[:, start : start + frame_size]
+                if chunk.shape[1] < frame_size:
+                    padded = np.zeros((2, frame_size), dtype=np.float32)
+                    padded[:, : chunk.shape[1]] = chunk
+                    chunk = padded
+                a_frame = av.AudioFrame.from_ndarray(chunk, format="fltp", layout="stereo")
+                a_frame.sample_rate = audio_sample_rate
+                a_frame.pts = start
+                for packet in a_stream.encode(a_frame):
+                    container.mux(packet)
+            for packet in a_stream.encode():
+                container.mux(packet)
+    finally:
+        container.close()
+
+    buffer.seek(0)
+    return InputImpl.VideoFromFile(buffer)
+
+

@@ -986,6 +986,7 @@ def split_h3_video_components_into_segments(
     from comfy_api.latest import InputImpl, Types
     from .image_helpers import cached_h3_reference_components, h3_video_length_from_seconds
     from .model_helpers import transcribe_reference_audio
+    from .video_helpers import encode_keyframe_optimized_video_clip
 
     components = cached_h3_reference_components(video, megapixels)
     source_frames = components.images
@@ -1068,7 +1069,7 @@ def split_h3_video_components_into_segments(
             "_uc_padded_frames": int(padded_frames),
         }
         t_audio = transcribe_reference_audio(whisper_model, components.audio, audio, timestamp_format, seg_length) if enable_whisper else ""
-        prep_video = InputImpl.VideoFromComponents(Types.VideoComponents(images=frames, audio=audio, frame_rate=Fraction(24)))
+        prep_video = encode_keyframe_optimized_video_clip(images=frames, fps=24.0, audio=audio)
         frames._uc_overlap_frames = int(seg_overlap)
         frames._uc_padded_frames = int(padded_frames)
         seg_len_obj = _H3SegmentInt(seg_length)
