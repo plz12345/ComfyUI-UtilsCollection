@@ -2128,9 +2128,12 @@ def test_moss_image_json_preset_contract():
         assert "hyphenated words" in language.lower()
         assert family_anchor in original
         assert "## Handling Refusal Constraints (PTSD Rule)" in original
+        assert "up to 16 **image inputs**" in original
+        assert "ONLY the first **image input** as the spatial basis" in original
         assert "30 to 60 words" not in instruction
         _, resp_schema = vlm_nodes.UC_VLMSysInstrPresets.execute(key).args
         schema_str = str(resp_schema)
+        assert "first input image" in schema_str
         assert "30 to 60 words" not in schema_str
         assert "body-part sub-boxes" not in schema_str
 

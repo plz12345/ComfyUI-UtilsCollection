@@ -686,7 +686,7 @@ _MOSS_IMAGE_LAYOUT_RESPONSE_SCHEMA: dict[str, Any] = {
         },
         "items": {
             "type": "array",
-            "description": "Coherent visible subjects, physical objects, and rendered text regions ordered from background to foreground.",
+            "description": "Coherent visible subjects, physical objects, and rendered text regions in the resulting scene ordered from background to foreground and anchored to the first input image's spatial layout.",
             "items": {
                 "type": "object",
                 "properties": {
@@ -697,7 +697,7 @@ _MOSS_IMAGE_LAYOUT_RESPONSE_SCHEMA: dict[str, Any] = {
                     },
                     "caption": {
                         "type": "string",
-                        "description": "Detailed natural language visual description of this coherent item's identity, species, gender, anatomy, pose, action, interactions, colors, and surface traits, or typography and surface treatment for text items.",
+                        "description": "Detailed natural language visual description of this coherent item's identity, species, gender, anatomy, pose, action, interactions, colors, and surface traits in the resulting scene, or typography and surface treatment for text items.",
                     },
                     "text": {
                         "type": "string",
@@ -705,7 +705,7 @@ _MOSS_IMAGE_LAYOUT_RESPONSE_SCHEMA: dict[str, Any] = {
                     },
                     "bbox": {
                         "type": "array",
-                        "description": "Four integers [ymin, xmin, ymax, xmax] on a 0 to 1000 top left grid.",
+                        "description": "Four integers [ymin, xmin, ymax, xmax] on a 0 to 1000 top left grid measured strictly from the first input image's canvas coordinates.",
                         "items": {"type": "integer", "minimum": 0, "maximum": 1000},
                     },
                 },
