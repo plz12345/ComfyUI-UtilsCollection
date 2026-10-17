@@ -355,7 +355,7 @@ class UC_H3RefVideoSegments(io.ComfyNode):
                     default=0.5,
                     min=0.0,
                     max=4.0,
-                    step=0.001,
+                    step=0.125,
                     tooltip="Target frame size. Set to 0.0 to keep original video resolution without scaling or cropping. Otherwise scales and center crops frames cleanly to the nearest standard aspect ratio.",
                 ),
                 io.Float.Input(

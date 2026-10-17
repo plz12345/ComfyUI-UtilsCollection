@@ -2075,7 +2075,7 @@ class UC_NoHaloLoHaloDownscale(io.ComfyNode):
             inputs=[
                 io.Image.Input("image"),
                 io.Combo.Input("method", options=["lohalo", "nohalo"], default="lohalo"),
-                io.Float.Input("megapixels", default=1.0, min=0.01, max=16.0, step=0.01),
+                io.Float.Input("megapixels", default=1.0, min=0.01, max=16.0, step=0.125),
                 io.Int.Input("multiple", default=16, min=4, max=128, step=4),
             ],
             outputs=[io.Image.Output(display_name="image")],
