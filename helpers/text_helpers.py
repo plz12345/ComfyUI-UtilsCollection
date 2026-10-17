@@ -671,6 +671,59 @@ _MOSS_IMAGE_SHORT_RESPONSE_SCHEMA: dict[str, Any] = {
     "required": ["summary", "items", "bbox_coord_space", "bbox_format"],
 }
 
+_MOSS_IMAGE_LAYOUT_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "summary": {
+            "type": "object",
+            "properties": {
+                "caption": {
+                    "type": "string",
+                    "description": "Complete natural language scene description combining viewpoint, spatial arrangement, primary subjects, actions, background environment, lighting, medium, and atmosphere.",
+                },
+            },
+            "required": ["caption"],
+        },
+        "items": {
+            "type": "array",
+            "description": "Coherent visible subjects, physical objects, and rendered text regions ordered from background to foreground.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "label": {
+                        "type": "string",
+                        "enum": ["character", "object", "text"],
+                        "description": "Item category: character for human, humanoid, anthropomorphic, feral, or creature subjects; object for distinct physical objects or props; text for visible rendered text regions.",
+                    },
+                    "caption": {
+                        "type": "string",
+                        "description": "Detailed natural language visual description of this coherent item's identity, species, gender, anatomy, pose, action, interactions, colors, and surface traits, or typography and surface treatment for text items.",
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "Exact verbatim visible characters when label is text.",
+                    },
+                    "bbox": {
+                        "type": "array",
+                        "description": "Four integers [ymin, xmin, ymax, xmax] on a 0 to 1000 top left grid.",
+                        "items": {"type": "integer", "minimum": 0, "maximum": 1000},
+                    },
+                },
+                "required": ["label", "caption", "bbox"],
+            },
+        },
+        "bbox_coord_space": {
+            "type": "string",
+            "enum": ["abs_centralized"],
+        },
+        "bbox_format": {
+            "type": "string",
+            "enum": ["yxyx"],
+        },
+    },
+    "required": ["summary", "items", "bbox_coord_space", "bbox_format"],
+}
+
 _IDEOGRAM_4_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -838,6 +891,8 @@ VLM_PRESET_RESPONSE_SCHEMAS: dict[str, dict[str, Any]] = {
     "moss_image_json_instruction": _MOSS_IMAGE_RESPONSE_SCHEMA,
     "moss_image_json_instruction_short": _MOSS_IMAGE_SHORT_RESPONSE_SCHEMA,
     "moss_image_json_instruction_color": _MOSS_IMAGE_RESPONSE_SCHEMA,
+    "moss_image_json_instruction_neutral": _MOSS_IMAGE_LAYOUT_RESPONSE_SCHEMA,
+    "moss_image_json_instruction_action": _MOSS_IMAGE_LAYOUT_RESPONSE_SCHEMA,
     "ideogram_4_json_instruction": _IDEOGRAM_4_RESPONSE_SCHEMA,
     "ideogram_4_json_instruction_short": _IDEOGRAM_4_SHORT_RESPONSE_SCHEMA,
     "ideogram_4_json_instruction_style": _IDEOGRAM_4_STYLE_RESPONSE_SCHEMA,
