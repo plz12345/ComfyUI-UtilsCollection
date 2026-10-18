@@ -2850,11 +2850,13 @@ class UC_Krea2InputEmbeds(io.ComfyNode):
                 io.Clip.Input("clip"),
                 io.String.Input("prompt", multiline=True, default="", tooltip="Input text prompt. Important: skips any template wrapping."),
                 io.String.Input("image_paths", multiline=True, default="", placeholder="C:/paths/to/image1.png\nC:/paths/to/image2.png", tooltip="Line-separated list of paths to image files. Must map 1-to-1 with file_names."),
-                io.Combo.Input(
+                io.Int.Input(
                     "vlm_resolution",
-                    options=["Fast (384)", "Balanced (512)", "Detailed (768)", "Large (1024)", "X-Large (1280)", "XX-Large (1536)", "Original"],
-                    default="Fast (384)",
-                    tooltip="Resolution of the image passed to the VLM (semantic path).",
+                    default=384,
+                    min=0,
+                    max=4096,
+                    step=32,
+                    tooltip="Equivalent-square VLM target from 256 to 4096. Values outside that range preserve original resolution.",
                 ),
                 io.String.Input("file_names", multiline=True, default="", placeholder="bulbasaur\nivysaur", tooltip="Line-separated list of file names to save as (without .safetensors). Can include nested subfolders. Must map 1-to-1 with image_paths."),
                 io.Boolean.Input(
@@ -2941,31 +2943,7 @@ class UC_Krea2InputEmbeds(io.ComfyNode):
             images_vl = []
             if img_path is not None:
                 image_tensor = load_vlm_image_tensor(img_path)
-
-                # Image resolution downscaling helper
-                def process_vlm_image(img, res):
-                    VLM_RESOLUTIONS = {
-                        "Fast (384)": 384,
-                        "Balanced (512)": 512,
-                        "Detailed (768)": 768,
-                        "Large (1024)": 1024,
-                        "X-Large (1280)": 1280,
-                        "XX-Large (1536)": 1536
-                    }
-                    samples = img.movedim(-1, 1)
-                    if res == "Original":
-                        return img
-                    else:
-                        vlm_size = VLM_RESOLUTIONS[res]
-                        total_vlm = vlm_size * vlm_size
-                        scale_by_vlm = math.sqrt(total_vlm / (samples.shape[3] * samples.shape[2]))
-                        width_vlm = round(samples.shape[3] * scale_by_vlm)
-                        height_vlm = round(samples.shape[2] * scale_by_vlm)
-
-                        s_vlm = resize_nchw(samples, width_vlm, height_vlm, "bicubic")
-                        return s_vlm.movedim(1, -1)
-
-                processed_img = process_vlm_image(image_tensor, vlm_resolution)
+                processed_img = prepare_vlm_image(image_tensor, vlm_resolution)
                 images_vl.append(processed_img)
 
             # Tokenize prompt using skip_template=True so no template wrapping is saved
@@ -3033,11 +3011,13 @@ class UC_Qwen3VLInputEmbeds(io.ComfyNode):
                 io.Clip.Input("clip"),
                 io.String.Input("prompt", multiline=True, default="", tooltip="Input text prompt. Important: skips any template wrapping."),
                 io.String.Input("image_paths", multiline=True, default="", placeholder="C:/paths/to/image1.png\nC:/paths/to/image2.png", tooltip="Line-separated list of paths to image files. Must map 1-to-1 with file_names."),
-                io.Combo.Input(
+                io.Int.Input(
                     "vlm_resolution",
-                    options=["Fast (384)", "Balanced (512)", "Detailed (768)", "Large (1024)", "X-Large (1280)", "XX-Large (1536)", "Original"],
-                    default="Fast (384)",
-                    tooltip="Resolution of the image passed to the VLM (semantic path).",
+                    default=384,
+                    min=0,
+                    max=4096,
+                    step=32,
+                    tooltip="Equivalent-square VLM target from 256 to 4096. Values outside that range preserve original resolution.",
                 ),
                 io.String.Input("file_names", multiline=True, default="", placeholder="bulbasaur\nivysaur", tooltip="Line-separated list of file names to save as (without .safetensors). Can include nested subfolders. Must map 1-to-1 with image_paths."),
                 io.Boolean.Input(
@@ -3124,31 +3104,7 @@ class UC_Qwen3VLInputEmbeds(io.ComfyNode):
             images_vl = []
             if img_path is not None:
                 image_tensor = load_vlm_image_tensor(img_path)
-
-                # Image resolution downscaling helper
-                def process_vlm_image(img, res):
-                    VLM_RESOLUTIONS = {
-                        "Fast (384)": 384,
-                        "Balanced (512)": 512,
-                        "Detailed (768)": 768,
-                        "Large (1024)": 1024,
-                        "X-Large (1280)": 1280,
-                        "XX-Large (1536)": 1536
-                    }
-                    samples = img.movedim(-1, 1)
-                    if res == "Original":
-                        return img
-                    else:
-                        vlm_size = VLM_RESOLUTIONS[res]
-                        total_vlm = vlm_size * vlm_size
-                        scale_by_vlm = math.sqrt(total_vlm / (samples.shape[3] * samples.shape[2]))
-                        width_vlm = round(samples.shape[3] * scale_by_vlm)
-                        height_vlm = round(samples.shape[2] * scale_by_vlm)
-
-                        s_vlm = resize_nchw(samples, width_vlm, height_vlm, "bicubic")
-                        return s_vlm.movedim(1, -1)
-
-                processed_img = process_vlm_image(image_tensor, vlm_resolution)
+                processed_img = prepare_vlm_image(image_tensor, vlm_resolution)
                 images_vl.append(processed_img)
 
             # Tokenize prompt using skip_template=True so no template wrapping is saved

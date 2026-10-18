@@ -1250,12 +1250,26 @@ def _qwen3vl_resized_dimensions(height: int, width: int, min_pixels=3136, max_pi
 VLM_RESOLUTION_MIN = 256
 VLM_RESOLUTION_MAX = 4096
 VLM_RESOLUTION_STEP = 32
+_LEGACY_VLM_RESOLUTION_PRESETS = {
+    "Fast (384)": 384,
+    "Balanced (512)": 512,
+    "Detailed (768)": 768,
+    "Large (1024)": 1024,
+    "X-Large (1280)": 1280,
+    "XX-Large (1536)": 1536,
+}
 
 
 def resolve_vlm_resolution(value) -> int | None:
     """Return a valid equivalent-square side length, or None for Original."""
     if isinstance(value, bool):
         return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped in _LEGACY_VLM_RESOLUTION_PRESETS:
+            return _LEGACY_VLM_RESOLUTION_PRESETS[stripped]
+        if stripped == "Original":
+            return None
     try:
         resolution = int(value)
     except (TypeError, ValueError):

@@ -1831,13 +1831,13 @@ class UC_EncoderNodesGuide(io.ComfyNode):
             ),
             "resolution_and_reference_latents": (
                 "## VLM resolution\n\n"
-                "`UC_AdvancedVisualConditioningEncode`, `UC_Krea2TokenAttentionWeight`, and `UC_AdvancedVisConEncoder` use an integer `vlm_resolution`:\n\n"
+                "`UC_AdvancedVisualConditioningEncode`, `UC_Krea2TokenAttentionWeight`, `UC_AdvancedVisConEncoder`, and `UC_VLMInputEmbeds` use an integer `vlm_resolution`:\n\n"
                 "- Default: `384`\n"
                 "- Widget range: `0` through `4096`\n"
                 "- Widget step: `32`\n"
                 "- Values from `256` through `4096` select an aspect-preserving equivalent-square target aligned to a 32-pixel grid.\n"
                 "- Values below `256` or above `4096` preserve the input resolution.\n\n"
-                "`UC_TextEncodeSystemEditAdvanced`, `UC_TextEncodeGemmaSystemEditAdvanced`, and `UC_VLMInputEmbeds` retain the preset choices `Fast (384)`, `Balanced (512)`, `Detailed (768)`, `Large (1024)`, `X-Large (1280)`, `XX-Large (1536)`, and `Original`.\n\n"
+                "`UC_TextEncodeSystemEditAdvanced` and `UC_TextEncodeGemmaSystemEditAdvanced` retain the preset choices `Fast (384)`, `Balanced (512)`, `Detailed (768)`, `Large (1024)`, `X-Large (1280)`, `XX-Large (1536)`, and `Original`.\n\n"
                 "VAE reference resolution choices are `Ultra (512)`, `Turbo (768)`, `Fast (1024)`, `Balanced (1280)`, `Detailed (1536)`, and `Original`.\n\n"
                 "`UC_AdvancedVisualConditioningEncode` and `UC_Krea2TokenAttentionWeight` encode only the selected base VLM resolution. `resolution_samples` belongs only to the `UC_AdvancedVisConEncoder` consensus stage and is not part of `UC_VisualFusionConfig`.\n\n"
                 "- `UC_AdvancedConsensusConfiguration` adds odd `resolution_samples` values from `1` through `15` with step `2`, plus `sample_offset` from `32` through `512` with step `32`, to the complete Text Consensus Blend Configurator contract.\n"
@@ -1914,7 +1914,7 @@ class UC_EncoderNodesGuide(io.ComfyNode):
             ),
             "embedding_export": (
                 "## VLM Input Embedding Export\n\n"
-                "`UC_VLMInputEmbeds` accepts `clip`, `prompt`, line-separated `image_paths`, preset `vlm_resolution`, line-separated `file_names`, and `slice_visual_tokens`.\n\n"
+                "`UC_VLMInputEmbeds` accepts `clip`, `prompt`, line-separated `image_paths`, integer `vlm_resolution`, line-separated `file_names`, and `slice_visual_tokens`.\n\n"
                 "- Every non-empty image path must map to one file name.\n"
                 "- Tokenization uses `skip_template=True`.\n"
                 "- With `slice_visual_tokens=False`, the full processed token embedding sequence is retained.\n"

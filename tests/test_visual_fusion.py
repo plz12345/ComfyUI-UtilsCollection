@@ -345,6 +345,9 @@ def test_visual_fusion_consumers_use_aligned_integer_resolution():
     for node in (
         UC_AdvancedVisualConditioningEncode,
         UC_Krea2TokenAttentionWeight,
+        encoder_nodes.UC_VLMInputEmbeds,
+        encoder_nodes.UC_Qwen3VLInputEmbeds,
+        encoder_nodes.UC_Krea2InputEmbeds,
     ):
         resolution = {
             value.id: value for value in node.define_schema().inputs
@@ -363,6 +366,8 @@ def test_vlm_resolution_boundaries_and_original_sentinels():
     assert encoder_helpers.resolve_vlm_resolution(255) is None
     assert encoder_helpers.resolve_vlm_resolution(4097) is None
     assert encoder_helpers.resolve_vlm_resolution(0) is None
+    assert encoder_helpers.resolve_vlm_resolution("Fast (384)") == 384
+    assert encoder_helpers.resolve_vlm_resolution("Original") is None
 
 
 def test_vlm_target_is_aspect_preserving_and_grid_aligned():
