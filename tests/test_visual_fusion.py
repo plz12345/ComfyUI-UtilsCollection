@@ -370,6 +370,60 @@ def test_vlm_resolution_boundaries_and_original_sentinels():
     assert encoder_helpers.resolve_vlm_resolution("Original") is None
 
 
+def test_vlm_input_embeds_slice_visual_tokens_extracts_only_visual_span(monkeypatch, tmp_path):
+    monkeypatch.setattr(encoder_nodes.folder_paths, "get_folder_paths", lambda _kind: [str(tmp_path)])
+    monkeypatch.setattr(encoder_nodes.os.path, "isfile", lambda _path: True)
+    monkeypatch.setattr(encoder_nodes, "load_vlm_image_tensor", lambda _path: torch.zeros(1, 64, 64, 3))
+
+    vision_start_vec = torch.full((1, 1, 8), -1.0)
+    visual_vecs = torch.arange(1, 33, dtype=torch.float32).reshape(1, 4, 8)
+    vision_end_vec = torch.full((1, 1, 8), -2.0)
+    full_seq = torch.cat([vision_start_vec, visual_vecs, vision_end_vec], dim=1)
+
+    class FakeClipModel:
+        def process_tokens(self, _tokens_only, _device):
+            embeds_info = [{"type": "image", "index": 1, "size": 4}]
+            return full_seq.clone(), None, None, embeds_info
+
+    class FakeClip:
+        cond_stage_model = types.SimpleNamespace(clip="qwen35_9b", qwen35_9b=FakeClipModel())
+
+        def load_model(self):
+            return None
+
+        def tokenize(self, _text, images=None, skip_template=True):
+            return {
+                "qwen35_9b": [
+                    [
+                        (248045, 1.0),
+                        (248053, 1.0),
+                        ({"type": "image", "data": images[0]}, 1.0),
+                        (248054, 1.0),
+                    ]
+                ]
+            }
+
+    out_full = encoder_nodes.UC_VLMInputEmbeds.execute(
+        FakeClip(),
+        prompt="",
+        image_paths="dummy.png",
+        vlm_resolution=384,
+        file_names="full_embed",
+        slice_visual_tokens=False,
+    )
+    out_sliced = encoder_nodes.UC_VLMInputEmbeds.execute(
+        FakeClip(),
+        prompt="",
+        image_paths="dummy.png",
+        vlm_resolution=384,
+        file_names="sliced_embed",
+        slice_visual_tokens=True,
+    )
+
+    assert torch.equal(out_full.args[1], full_seq.squeeze(0))
+    assert torch.equal(out_sliced.args[1], visual_vecs.squeeze(0))
+
+
 def test_vlm_target_is_aspect_preserving_and_grid_aligned():
     height, width = encoder_helpers.vlm_target_dimensions(600, 1200, 384)
     assert height % 32 == width % 32 == 0

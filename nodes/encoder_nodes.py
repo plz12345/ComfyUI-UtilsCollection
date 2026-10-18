@@ -2862,7 +2862,7 @@ class UC_Krea2InputEmbeds(io.ComfyNode):
                 io.Boolean.Input(
                     "slice_visual_tokens",
                     default=False,
-                    tooltip="If True, removes the first validated visual-token span. If False, preserves the full interleaved sequence.",
+                    tooltip="If True, extracts only the interior visual token span (stripping <|vision_start|>, <|vision_end|>, and text tokens). If False, preserves the full sequence.",
                 ),
             ],
             outputs=[
@@ -2948,7 +2948,7 @@ class UC_Krea2InputEmbeds(io.ComfyNode):
 
             # Tokenize prompt using skip_template=True so no template wrapping is saved
             modified_prompt = prompt
-            if img_path is not None:
+            if img_path is not None and not is_klein_vl_text_encoder(clip):
                 if not any(tag in prompt for tag in ["<|image_pad|>", "<|image|>", "<|vision_start|>"]):
                     modified_prompt = "<|vision_start|><|image_pad|><|vision_end|>" + modified_prompt
 
@@ -2961,6 +2961,9 @@ class UC_Krea2InputEmbeds(io.ComfyNode):
             # Slice off the first token (the <|im_start|> trigger token) to match skip_template behavior
             for i in range(len(token_list)):
                 token_list[i] = token_list[i][1:]
+                if is_flux3_text_encoder(clip):
+                    while token_list[i] and isinstance(token_list[i][-1][0], int) and token_list[i][-1][0] == 151643:
+                        token_list[i].pop()
             tokens_only = [[t[0] for t in b] for b in token_list]
             device = comfy.model_management.get_torch_device()
 
@@ -2968,13 +2971,19 @@ class UC_Krea2InputEmbeds(io.ComfyNode):
                 embeds, _, _, embeds_info = clip_model.process_tokens(tokens_only, device)
 
                 if slice_visual_tokens:
-                    vis_start, vis_end = find_visual_token_range(tokens, embeds)
-                    if vis_start < vis_end:
-                        prefix = embeds[:, :vis_start, :]
-                        suffix = embeds[:, vis_end:, :]
-                        embeds_sliced = torch.cat([prefix, suffix], dim=1)
+                    image_spans = [
+                        (int(entry["index"]), int(entry["index"]) + int(entry["size"]))
+                        for entry in (embeds_info or ())
+                        if isinstance(entry, dict) and entry.get("type") == "image" and int(entry.get("size", 0)) > 0
+                    ]
+                    if image_spans:
+                        embeds_sliced = torch.cat([embeds[:, s:e, :] for s, e in image_spans], dim=1)
                     else:
-                        embeds_sliced = embeds
+                        vis_start, vis_end = find_visual_token_range(tokens, embeds)
+                        if vis_start < vis_end:
+                            embeds_sliced = embeds[:, vis_start:vis_end, :]
+                        else:
+                            embeds_sliced = embeds
                 else:
                     embeds_sliced = embeds
 
@@ -3023,7 +3032,7 @@ class UC_Qwen3VLInputEmbeds(io.ComfyNode):
                 io.Boolean.Input(
                     "slice_visual_tokens",
                     default=False,
-                    tooltip="If True, removes the first validated visual-token span. If False, preserves the full interleaved sequence.",
+                    tooltip="If True, extracts only the interior visual token span (stripping <|vision_start|>, <|vision_end|>, and text tokens). If False, preserves the full sequence.",
                 ),
             ],
             outputs=[
@@ -3109,7 +3118,7 @@ class UC_Qwen3VLInputEmbeds(io.ComfyNode):
 
             # Tokenize prompt using skip_template=True so no template wrapping is saved
             modified_prompt = prompt
-            if img_path is not None:
+            if img_path is not None and not is_klein_vl_text_encoder(clip):
                 if not any(tag in prompt for tag in ["<|image_pad|>", "<|image|>", "<|vision_start|>"]):
                     modified_prompt = "<|vision_start|><|image_pad|><|vision_end|>" + modified_prompt
 
@@ -3125,6 +3134,9 @@ class UC_Qwen3VLInputEmbeds(io.ComfyNode):
             # Slice off the first token (the <|im_start|> trigger token) to match skip_template behavior
             for i in range(len(token_list)):
                 token_list[i] = token_list[i][1:]
+                if is_flux3_text_encoder(clip):
+                    while token_list[i] and isinstance(token_list[i][-1][0], int) and token_list[i][-1][0] == 151643:
+                        token_list[i].pop()
             tokens_only = [[t[0] for t in b] for b in token_list]
             device = comfy.model_management.get_torch_device()
 
@@ -3132,13 +3144,19 @@ class UC_Qwen3VLInputEmbeds(io.ComfyNode):
                 embeds, _, _, embeds_info = clip_model.process_tokens(tokens_only, device)
 
                 if slice_visual_tokens:
-                    vis_start, vis_end = find_visual_token_range(tokens, embeds)
-                    if vis_start < vis_end:
-                        prefix = embeds[:, :vis_start, :]
-                        suffix = embeds[:, vis_end:, :]
-                        embeds_sliced = torch.cat([prefix, suffix], dim=1)
+                    image_spans = [
+                        (int(entry["index"]), int(entry["index"]) + int(entry["size"]))
+                        for entry in (embeds_info or ())
+                        if isinstance(entry, dict) and entry.get("type") == "image" and int(entry.get("size", 0)) > 0
+                    ]
+                    if image_spans:
+                        embeds_sliced = torch.cat([embeds[:, s:e, :] for s, e in image_spans], dim=1)
                     else:
-                        embeds_sliced = embeds
+                        vis_start, vis_end = find_visual_token_range(tokens, embeds)
+                        if vis_start < vis_end:
+                            embeds_sliced = embeds[:, vis_start:vis_end, :]
+                        else:
+                            embeds_sliced = embeds
                 else:
                     embeds_sliced = embeds
 

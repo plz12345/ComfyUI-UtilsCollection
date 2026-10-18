@@ -1918,7 +1918,7 @@ class UC_EncoderNodesGuide(io.ComfyNode):
                 "- Every non-empty image path must map to one file name.\n"
                 "- Tokenization uses `skip_template=True`.\n"
                 "- With `slice_visual_tokens=False`, the full processed token embedding sequence is retained.\n"
-                "- With `slice_visual_tokens=True`, the first validated visual-token span is removed.\n"
+                "- With `slice_visual_tokens=True`, only the interior visual-token span is retained (stripping `<|vision_start|>`, `<|vision_end|>`, and surrounding text tokens).\n"
                 "- Each state dictionary is saved as `.safetensors` below ComfyUI's embeddings directory.\n"
                 "- The node outputs the final state dictionary and final two-dimensional embedding tensor produced by the input list."
             ),
