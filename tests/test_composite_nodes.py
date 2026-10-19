@@ -3716,7 +3716,11 @@ def test_create_bounding_boxes_nodes1_elements_and_flux3_layout_compatibility(mo
     assert inputs_by_id["width"].default == 0
     assert inputs_by_id["height"].default == 0
     assert inputs_by_id["input_coord_space"].default == "gemini_0_to_1000"
-    assert inputs_by_id["input_coord_space"].options == ["gemini_0_to_1000", "moss_centered_pixels"]
+    assert inputs_by_id["input_coord_space"].options == [
+        "gemini_0_to_1000",
+        "qwen_0_to_1000",
+        "moss_centered_pixels",
+    ]
 
     box_data = json.dumps({
         "version": 1,
@@ -3842,3 +3846,36 @@ def test_create_bounding_boxes_nodes1_elements_and_flux3_layout_compatibility(mo
         input_coord_space="gemini_0_to_1000",
     ).args[0]
     assert converted_moss_json == moss_json
+
+    qwen_native_json = json.dumps({
+        "summary": {"caption": "A nighttime street scene."},
+        "items": [
+            {
+                "label": "character",
+                "caption": "a red sports car",
+                "palette": ["#FF0000"],
+                "bbox": [100, 200, 500, 500],
+            },
+            {
+                "label": "text",
+                "caption": "neon sign",
+                "text": "FAST",
+                "palette": ["#00FFFF"],
+                "bbox": [500, 600, 750, 800],
+            },
+            {
+                "label": "object",
+                "caption": "truncated trailing item",
+                "palette": ["#"],
+                "bbox": [],
+            },
+        ],
+        "bbox_coord_space": "abs_centralized",
+        "bbox_format": "yxyx",
+    })
+    converted_qwen_json = composite_nodes.UC_MOSSImageBBoxConvert.execute(
+        prompt=qwen_native_json,
+        image=torch.zeros(1, 500, 1000, 3),
+        input_coord_space="qwen_0_to_1000",
+    ).args[0]
+    assert converted_qwen_json == moss_json

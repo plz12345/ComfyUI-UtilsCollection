@@ -870,24 +870,39 @@ def parse_bounding_box_editor_data(box_data, width: int, height: int) -> tuple[l
     return regions, last_incoming
 
 
-def _extract_incoming_summary_and_labels(data) -> tuple[str, list[str]]:
+def _extract_incoming_summary_and_labels(data) -> tuple[str, list[str], dict]:
     if data is None:
-        return "", []
+        return "", [], {}
     parsed = data
     if isinstance(data, str):
         text = data.strip()
         if not text:
-            return "", []
+            return "", [], {}
         try:
             parsed = json.loads(text)
         except (ValueError, TypeError):
-            return "", []
+            return "", [], {}
     if not isinstance(parsed, dict):
-        return "", []
+        return "", [], {}
     summary = parsed.get("summary")
     caption = ""
+    summary_extras: dict = {}
     if isinstance(summary, dict):
         caption = str(summary.get("caption", "") or "").strip()
+        if isinstance(summary.get("meta"), list):
+            meta = [str(m).strip() for m in summary["meta"] if str(m).strip()]
+            if meta:
+                summary_extras["meta"] = meta
+        if isinstance(summary.get("canvas"), str) and summary["canvas"].strip() in (
+            "single",
+            "multi_panel",
+            "collage",
+        ):
+            summary_extras["canvas"] = summary["canvas"].strip()
+        if isinstance(summary.get("palette"), list):
+            pal = [str(p).strip() for p in summary["palette"] if str(p).strip()]
+            if pal:
+                summary_extras["palette"] = pal
     elif isinstance(parsed.get("high_level_description"), str):
         caption = parsed.get("high_level_description", "").strip()
     items = parsed.get("items")
@@ -897,7 +912,7 @@ def _extract_incoming_summary_and_labels(data) -> tuple[str, list[str]]:
             if isinstance(item, dict):
                 lbl = str(item.get("label", "object") or "object").lower()
                 labels.append(lbl if lbl in ("character", "object", "text") else "object")
-    return caption, labels
+    return caption, labels, summary_extras
 
 
 def _coerce_incoming_bboxes_input(data, width: int, height: int, input_coord_space: str = "gemini_0_to_1000"):
@@ -925,6 +940,8 @@ def _coerce_incoming_bboxes_input(data, width: int, height: int, input_coord_spa
     mode = str(input_coord_space or "gemini_0_to_1000").lower()
     w = max(1, int(width or 1024))
     h = max(1, int(height or 1024))
+    from comfy_extras.color_util import normalize_palette
+
     elements = []
     for item in items:
         if not isinstance(item, dict):
@@ -932,22 +949,39 @@ def _coerce_incoming_bboxes_input(data, width: int, height: int, input_coord_spa
         bbox = item.get("bbox")
         if not (isinstance(bbox, (list, tuple)) and len(bbox) == 4):
             continue
-        y0, x0, y1, x1 = (float(v) for v in bbox)
-        has_negative = any(v < 0 for v in (y0, x0, y1, x1))
+        try:
+            b0, b1, b2, b3 = (float(v) for v in bbox)
+        except (TypeError, ValueError):
+            continue
+        has_negative = any(v < 0 for v in (b0, b1, b2, b3))
         use_centralized = mode in ("moss_centered_pixels", "abs_centralized") or has_negative
+        use_qwen_xyxy = mode in ("qwen_0_to_1000", "qwen_xyxy", "xyxy_1000") and not use_centralized
         if use_centralized:
+            y0, x0, y1, x1 = b0, b1, b2, b3
             ymin = max(0.0, min(1000.0, (y0 + (h // 2)) * 1000.0 / h))
             xmin = max(0.0, min(1000.0, (x0 + (w // 2)) * 1000.0 / w))
             ymax = max(0.0, min(1000.0, (y1 + (h // 2)) * 1000.0 / h))
             xmax = max(0.0, min(1000.0, (x1 + (w // 2)) * 1000.0 / w))
-            norm_bbox = [round(ymin), round(xmin), round(ymax), round(xmax)]
-        else:
             norm_bbox = [
-                max(0, min(1000, round(y0))),
-                max(0, min(1000, round(x0))),
-                max(0, min(1000, round(y1))),
-                max(0, min(1000, round(x1))),
+                round(min(ymin, ymax)),
+                round(min(xmin, xmax)),
+                round(max(ymin, ymax)),
+                round(max(xmin, xmax)),
             ]
+        elif use_qwen_xyxy:
+            x0, y0, x1, y1 = b0, b1, b2, b3
+            ymin = max(0, min(1000, round(min(y0, y1))))
+            xmin = max(0, min(1000, round(min(x0, x1))))
+            ymax = max(0, min(1000, round(max(y0, y1))))
+            xmax = max(0, min(1000, round(max(x0, x1))))
+            norm_bbox = [ymin, xmin, ymax, xmax]
+        else:
+            y0, x0, y1, x1 = b0, b1, b2, b3
+            ymin = max(0, min(1000, round(min(y0, y1))))
+            xmin = max(0, min(1000, round(min(x0, x1))))
+            ymax = max(0, min(1000, round(max(y0, y1))))
+            xmax = max(0, min(1000, round(max(x0, x1))))
+            norm_bbox = [ymin, xmin, ymax, xmax]
         label = str(item.get("label", item.get("type", "object")) or "object").lower()
         etype = "text" if label == "text" else "obj"
         element = {
@@ -957,9 +991,16 @@ def _coerce_incoming_bboxes_input(data, width: int, height: int, input_coord_spa
         }
         if etype == "text":
             element["text"] = str(item.get("text", "") or "")
-        palette = item.get("palette") or item.get("color_palette")
-        if isinstance(palette, list) and palette:
-            element["color_palette"] = list(palette)
+        raw_palette = item.get("palette") or item.get("color_palette")
+        if isinstance(raw_palette, list) and raw_palette:
+            clean_palette = normalize_palette(raw_palette)[:5]
+            if clean_palette:
+                element["color_palette"] = clean_palette
+        raw_tags = item.get("tags")
+        if isinstance(raw_tags, list) and raw_tags:
+            clean_tags = [str(t).strip() for t in raw_tags if str(t).strip()]
+            if clean_tags:
+                element["tags"] = clean_tags
         elements.append(element)
     return elements
 
@@ -983,7 +1024,7 @@ def build_moss_image_layout_prompt(
     w_px = max(16, raw_w if raw_w > 0 else bg_w)
     h_px = max(16, raw_h if raw_h > 0 else bg_h)
 
-    summary_caption, parsed_labels = _extract_incoming_summary_and_labels(prompt)
+    summary_caption, parsed_labels, summary_extras = _extract_incoming_summary_and_labels(prompt)
     resolved_elements = list(elements) if isinstance(elements, list) and elements else None
     if resolved_elements is None:
         coerced = _coerce_incoming_bboxes_input(prompt, w_px, h_px, input_coord_space=input_coord_space)
@@ -1014,6 +1055,8 @@ def build_moss_image_layout_prompt(
         item: dict[str, Any] = {"label": label, "caption": str(el.get("desc", "") or "")}
         if label == "text":
             item["text"] = str(el.get("text", "") or "")
+        if el.get("tags"):
+            item["tags"] = [str(t).strip() for t in el["tags"] if str(t).strip()]
         if el.get("color_palette"):
             item["palette"] = list(el["color_palette"])
         y0, x0, y1, x1 = (float(v) for v in el["bbox"])
@@ -1026,8 +1069,16 @@ def build_moss_image_layout_prompt(
         items.append(item)
     if not items:
         return summary_caption or str(prompt or "").strip()
+    summary_obj: dict = {}
+    if "meta" in summary_extras:
+        summary_obj["meta"] = summary_extras["meta"]
+    if "canvas" in summary_extras:
+        summary_obj["canvas"] = summary_extras["canvas"]
+    summary_obj["caption"] = summary_caption
+    if "palette" in summary_extras:
+        summary_obj["palette"] = summary_extras["palette"]
     layout = {
-        "summary": {"caption": summary_caption},
+        "summary": summary_obj,
         "items": items,
         "bbox_coord_space": "abs_centralized",
         "bbox_format": "yxyx",
@@ -1054,7 +1105,7 @@ def execute_create_bounding_boxes(
     w_px = max(64, raw_w if raw_w > 0 else bg_w)
     h_px = max(64, raw_h if raw_h > 0 else bg_h)
 
-    incoming_summary, incoming_labels = _extract_incoming_summary_and_labels(bboxes)
+    incoming_summary, incoming_labels, _ = _extract_incoming_summary_and_labels(bboxes)
     incoming_boxes = core_bboxes.boxes_from_input(
         _coerce_incoming_bboxes_input(bboxes, w_px, h_px, input_coord_space=input_coord_space),
         w_px,

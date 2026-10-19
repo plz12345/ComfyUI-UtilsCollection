@@ -1990,7 +1990,7 @@ class UC_CompositeNodesGuide(io.ComfyNode):
                 "- `UC_MediaPipeFaceCompositeOptions`: supplies options for direct source-to-target face compositing.\n"
                 "- `UC_MediaPipeFaceComposite`: composites the largest detected source face into the largest detected target face.\n"
                 "- `UC_CreateBoundingBoxes`: interactive Nodes 1.0 bounding-box canvas editor outputting `preview`, pixel `bboxes`, layout `elements`, and `moss_prompt` for `FLUX.3 Layout Prompt`, `Build JSON Prompt (Ideogram)`, and `MOSS-Image`.\n"
-                "- `UC_MOSSImageBBoxConvert`: passthrough converter that maps Gemini's 0 to 1000 layout JSON (or `Create Bounding Boxes` elements) into a ready-to-encode `MOSS-Image` centered-pixel layout JSON prompt."
+                "- `UC_MOSSImageBBoxConvert`: passthrough converter that maps Gemini (`gemini_0_to_1000`) or Qwen3-VL / Qwen3.5 (`qwen_0_to_1000`) 0 to 1000 layout JSON (or `Create Bounding Boxes` elements) into a ready-to-encode `MOSS-Image` centered-pixel layout JSON prompt."
             ),
             "model_inputs": (
                 "## Model inputs and defaults\n\n"

@@ -2090,12 +2090,22 @@ def test_moss_image_json_preset_contract():
         "moss_image_json_instruction_color",
         "moss_image_json_instruction_neutral",
         "moss_image_json_instruction_action",
+        "moss_image_json_instruction_qwen",
+        "moss_image_json_instruction_short_qwen",
+        "moss_image_json_instruction_color_qwen",
+        "moss_image_json_instruction_neutral_qwen",
+        "moss_image_json_instruction_action_qwen",
     ):
         instruction = vlm_presets.system_instructions_vlm[key]
-        assert '"summary":{"caption":"..."}' in instruction
+        assert '"summary":{"meta":["..."],"canvas":"single","caption":"..."}' in instruction
         assert '"bbox_coord_space":"abs_centralized"' in instruction
         assert '"bbox_format":"yxyx"' in instruction
         assert '"label":"character"' in instruction
+        if key.endswith("_qwen"):
+            assert "[xmin, ymin, xmax, ymax]" in instruction
+            assert "[ymin, xmin, ymax, xmax]" not in instruction
+        else:
+            assert "[ymin, xmin, ymax, xmax]" in instruction
         assert key in options
         sys_text, resp_schema = vlm_nodes.UC_VLMSysInstrPresets.execute(key).args
         assert sys_text == instruction

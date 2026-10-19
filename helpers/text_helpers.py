@@ -567,12 +567,22 @@ _MOSS_IMAGE_RESPONSE_SCHEMA: dict[str, Any] = {
         "summary": {
             "type": "object",
             "properties": {
+                "meta": {
+                    "type": "array",
+                    "description": "1 to 3 concise medium or genre tags describing the image format or genre.",
+                    "items": {"type": "string"},
+                },
+                "canvas": {
+                    "type": "string",
+                    "enum": ["single", "multi_panel", "collage"],
+                    "description": "Canvas layout type: single, multi_panel, or collage.",
+                },
                 "caption": {
                     "type": "string",
                     "description": "Whole-scene description combining subject overview, camera viewpoint, background environment, lighting, medium, and aesthetics.",
                 },
             },
-            "required": ["caption"],
+            "required": ["meta", "canvas", "caption"],
         },
         "items": {
             "type": "array",
@@ -625,12 +635,22 @@ _MOSS_IMAGE_SHORT_RESPONSE_SCHEMA: dict[str, Any] = {
         "summary": {
             "type": "object",
             "properties": {
+                "meta": {
+                    "type": "array",
+                    "description": "1 to 3 concise medium or genre tags describing the image format or genre.",
+                    "items": {"type": "string"},
+                },
+                "canvas": {
+                    "type": "string",
+                    "enum": ["single", "multi_panel", "collage"],
+                    "description": "Canvas layout type: single, multi_panel, or collage.",
+                },
                 "caption": {
                     "type": "string",
                     "description": "Concise whole-scene description combining subject overview, camera viewpoint, background environment, lighting, medium, and aesthetics.",
                 },
             },
-            "required": ["caption"],
+            "required": ["meta", "canvas", "caption"],
         },
         "items": {
             "type": "array",
@@ -677,12 +697,22 @@ _MOSS_IMAGE_LAYOUT_RESPONSE_SCHEMA: dict[str, Any] = {
         "summary": {
             "type": "object",
             "properties": {
+                "meta": {
+                    "type": "array",
+                    "description": "1 to 3 concise medium or genre tags describing the image format or genre.",
+                    "items": {"type": "string"},
+                },
+                "canvas": {
+                    "type": "string",
+                    "enum": ["single", "multi_panel", "collage"],
+                    "description": "Canvas layout type: single, multi_panel, or collage.",
+                },
                 "caption": {
                     "type": "string",
                     "description": "Complete natural language scene description combining viewpoint, spatial arrangement, primary subjects, actions, background environment, lighting, medium, and atmosphere.",
                 },
             },
-            "required": ["caption"],
+            "required": ["meta", "canvas", "caption"],
         },
         "items": {
             "type": "array",
@@ -893,6 +923,11 @@ VLM_PRESET_RESPONSE_SCHEMAS: dict[str, dict[str, Any]] = {
     "moss_image_json_instruction_color": _MOSS_IMAGE_RESPONSE_SCHEMA,
     "moss_image_json_instruction_neutral": _MOSS_IMAGE_LAYOUT_RESPONSE_SCHEMA,
     "moss_image_json_instruction_action": _MOSS_IMAGE_LAYOUT_RESPONSE_SCHEMA,
+    "moss_image_json_instruction_qwen": _MOSS_IMAGE_RESPONSE_SCHEMA,
+    "moss_image_json_instruction_short_qwen": _MOSS_IMAGE_SHORT_RESPONSE_SCHEMA,
+    "moss_image_json_instruction_color_qwen": _MOSS_IMAGE_RESPONSE_SCHEMA,
+    "moss_image_json_instruction_neutral_qwen": _MOSS_IMAGE_LAYOUT_RESPONSE_SCHEMA,
+    "moss_image_json_instruction_action_qwen": _MOSS_IMAGE_LAYOUT_RESPONSE_SCHEMA,
     "ideogram_4_json_instruction": _IDEOGRAM_4_RESPONSE_SCHEMA,
     "ideogram_4_json_instruction_short": _IDEOGRAM_4_SHORT_RESPONSE_SCHEMA,
     "ideogram_4_json_instruction_style": _IDEOGRAM_4_STYLE_RESPONSE_SCHEMA,

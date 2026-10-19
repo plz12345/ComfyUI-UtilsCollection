@@ -2181,12 +2181,13 @@ class UC_CreateBoundingBoxes(io.ComfyNode):
                 ),
                 io.Combo.Input(
                     "input_coord_space",
-                    options=["gemini_0_to_1000", "moss_centered_pixels"],
+                    options=["gemini_0_to_1000", "qwen_0_to_1000", "moss_centered_pixels"],
                     default="gemini_0_to_1000",
                     tooltip=(
-                        "Format of incoming JSON bounding boxes connected to bboxes. Keep the default gemini_0_to_1000 "
-                        "when connecting Gemini or VLM layout JSON outputs (which use a 0 to 1000 grid); switch to "
-                        "moss_centered_pixels only when feeding an already-converted MOSS-Image layout prompt."
+                        "Format of incoming JSON bounding boxes connected to bboxes. Use gemini_0_to_1000 for Gemini "
+                        "layout JSON outputs ([ymin, xmin, ymax, xmax] on a 0 to 1000 grid), qwen_0_to_1000 for local "
+                        "Qwen3-VL / Qwen3.5 JSON outputs ([xmin, ymin, xmax, ymax] on a 0 to 1000 grid), or "
+                        "moss_centered_pixels when feeding an already-converted MOSS-Image layout prompt."
                     ),
                 ),
                 io.String.Input(
@@ -2302,12 +2303,13 @@ class UC_MOSSImageBBoxConvert(io.ComfyNode):
                 ),
                 io.Combo.Input(
                     "input_coord_space",
-                    options=["gemini_0_to_1000", "moss_centered_pixels"],
+                    options=["gemini_0_to_1000", "qwen_0_to_1000", "moss_centered_pixels"],
                     default="gemini_0_to_1000",
                     tooltip=(
-                        "Format of the incoming JSON boxes in prompt. Keep the default gemini_0_to_1000 when connecting "
-                        "Gemini or VLM layout JSON outputs (which use a 0 to 1000 grid); switch to moss_centered_pixels "
-                        "only when feeding an already-converted MOSS-Image layout prompt."
+                        "Format of the incoming JSON boxes in prompt. Use gemini_0_to_1000 for Gemini layout JSON "
+                        "outputs ([ymin, xmin, ymax, xmax] on a 0 to 1000 grid), qwen_0_to_1000 for local Qwen3-VL / "
+                        "Qwen3.5 JSON outputs ([xmin, ymin, xmax, ymax] on a 0 to 1000 grid), or moss_centered_pixels "
+                        "when feeding an already-converted MOSS-Image layout prompt."
                     ),
                 ),
                 io.String.Input(

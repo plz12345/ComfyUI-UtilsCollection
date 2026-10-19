@@ -485,7 +485,15 @@ def _conform_value_to_schema(value: Any, schema: dict[str, Any]) -> Any:
                         raw_val = source[alt]
                         break
             if raw_val is not None:
-                out[key] = _conform_value_to_schema(raw_val, prop_schema)
+                conformed_val = _conform_value_to_schema(raw_val, prop_schema)
+                if (
+                    key == "text"
+                    and key not in req
+                    and str(out.get("label", source.get("label", "")) or "").strip().lower() not in ("", "text")
+                    and not str(conformed_val or "").strip()
+                ):
+                    continue
+                out[key] = conformed_val
             elif key in req:
                 out[key] = _default_for_schema(prop_schema)
         if not props:
@@ -497,6 +505,22 @@ def _conform_value_to_schema(value: Any, schema: dict[str, Any]) -> Any:
         raw_list = value if isinstance(value, list) else ([value] if value is not None and value != "" else [])
         item_schema = schema.get("items") if isinstance(schema.get("items"), dict) else None
         items = [_conform_value_to_schema(item, item_schema) if item_schema else item for item in raw_list]
+        if isinstance(item_schema, dict) and item_schema.get("type") == "object":
+            item_req = item_schema.get("required") if isinstance(item_schema.get("required"), list) else []
+            if "bbox" in item_req:
+                items = [
+                    it
+                    for it in items
+                    if isinstance(it, dict)
+                    and isinstance(it.get("bbox"), list)
+                    and len(it["bbox"]) == 4
+                ]
+        elif (
+            isinstance(item_schema, dict)
+            and item_schema.get("type") == "string"
+            and "hex" in str(schema.get("description", "")).lower()
+        ):
+            items = [s for s in items if isinstance(s, str) and re.fullmatch(r"#[0-9A-Fa-f]{6}", s.strip())]
         max_items = schema.get("maxItems")
         if isinstance(max_items, int) and max_items >= 0:
             items = items[:max_items]
