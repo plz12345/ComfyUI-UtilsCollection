@@ -15,12 +15,18 @@
         "properties": {
           "module": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
           "architecture": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*$"},
-          "source_format": {"enum": ["state_dict", "torchscript"]},
+          "source_format": {"enum": ["state_dict", "torchscript", "yolo_checkpoint"]},
           "source_repo": {"type": "string"}, "source_file": {"type": "string"},
           "filename": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+\\.safetensors$"},
           "hf_path": {"type": "string"},
+          "folder_category": {"type": "string"},
+          "folder_relative": {"type": "string", "pattern": "^[a-z][a-z0-9_]*(/[a-z0-9_-]+)*$"},
           "mapping": {"enum": ["strip_model_prefix", "module_maps"]},
-          "map_prefix": {"type": "string"}, "input": {"type": "string"}, "output": {"type": "string"}
+          "map_prefix": {"type": "string"},
+          "task": {"enum": ["bbox", "segm"]},
+          "imgsz": {"type": "integer", "minimum": 32},
+          "labels": {"type": "array", "items": {"type": "string"}},
+          "input": {"type": "string"}, "output": {"type": "string"}
         },
         "additionalProperties": false
       }

@@ -47,6 +47,62 @@
       "filename": "densepose_r50_fpn.safetensors", "hf_path": "preprocessors/densepose/densepose_r50_fpn.safetensors",
       "mapping": "module_maps", "input": "NCHW RGB 0..255; model normalizes and pads to stride32",
       "output": "per-frame (boxes, coarse, fine, u, v), tensors remain on execution device"
+    },
+    "yolo_segm_face_v8m": {
+      "module": "yolo", "architecture": "YOLOv8mSeg", "source_format": "yolo_checkpoint",
+      "source_repo": "Bingsu/adetailer", "source_file": "face_yolov8m-seg_60.pt",
+      "filename": "face_yolov8m-seg_60.safetensors", "hf_path": "yolo/segm/face_yolov8m-seg_60.safetensors",
+      "folder_category": "yolo_segm", "folder_relative": "yolo/segm",
+      "mapping": "module_maps", "task": "segm", "imgsz": 640, "labels": ["face"],
+      "input": "NCHW RGB 0..1 letterboxed to stride32 (640)", "output": "(predictions B37xA, protos B32xH/4xW/4)"
+    },
+    "yolo_segm_person_v8m": {
+      "module": "yolo", "architecture": "YOLOv8mSeg", "source_format": "yolo_checkpoint",
+      "source_repo": "Bingsu/adetailer", "source_file": "person_yolov8m-seg.pt",
+      "filename": "person_yolov8m-seg.safetensors", "hf_path": "yolo/segm/person_yolov8m-seg.safetensors",
+      "folder_category": "yolo_segm", "folder_relative": "yolo/segm",
+      "mapping": "module_maps", "task": "segm", "imgsz": 640, "labels": ["person"],
+      "input": "NCHW RGB 0..1 letterboxed to stride32 (640)", "output": "(predictions B37xA, protos B32xH/4xW/4)"
+    },
+    "yolo_segm_skin_v8m": {
+      "module": "yolo", "architecture": "YOLOv8mSeg", "source_format": "yolo_checkpoint",
+      "source_repo": "Bingsu/adetailer", "source_file": "skin_yolov8m-seg_400.pt",
+      "filename": "skin_yolov8m-seg_400.safetensors", "hf_path": "yolo/segm/skin_yolov8m-seg_400.safetensors",
+      "folder_category": "yolo_segm", "folder_relative": "yolo/segm",
+      "mapping": "module_maps", "task": "segm", "imgsz": 640, "labels": ["skin"],
+      "input": "NCHW RGB 0..1 letterboxed to stride32 (640)", "output": "(predictions B37xA, protos B32xH/4xW/4)"
+    },
+    "yolo_segm_hair_v8n": {
+      "module": "yolo", "architecture": "YOLOv8nSeg", "source_format": "yolo_checkpoint",
+      "source_repo": "Bingsu/adetailer", "source_file": "hair_yolov8n-seg_60.pt",
+      "filename": "hair_yolov8n-seg_60.safetensors", "hf_path": "yolo/segm/hair_yolov8n-seg_60.safetensors",
+      "folder_category": "yolo_segm", "folder_relative": "yolo/segm",
+      "mapping": "module_maps", "task": "segm", "imgsz": 640, "labels": ["hair"],
+      "input": "NCHW RGB 0..1 letterboxed to stride32 (640)", "output": "(predictions B37xA, protos B32xH/4xW/4)"
+    },
+    "yolo_bbox_face_v8m": {
+      "module": "yolo", "architecture": "YOLOv8mDetect", "source_format": "yolo_checkpoint",
+      "source_repo": "Bingsu/adetailer", "source_file": "face_yolov8m.pt",
+      "filename": "face_yolov8m.safetensors", "hf_path": "yolo/bbox/face_yolov8m.safetensors",
+      "folder_category": "yolo_bbox", "folder_relative": "yolo/bbox",
+      "mapping": "module_maps", "task": "bbox", "imgsz": 640, "labels": ["face"],
+      "input": "NCHW RGB 0..1 letterboxed to stride32 (640)", "output": "predictions B5xA"
+    },
+    "yolo_bbox_hand_v8s": {
+      "module": "yolo", "architecture": "YOLOv8sDetect", "source_format": "yolo_checkpoint",
+      "source_repo": "Bingsu/adetailer", "source_file": "hand_yolov8s.pt",
+      "filename": "hand_yolov8s.safetensors", "hf_path": "yolo/bbox/hand_yolov8s.safetensors",
+      "folder_category": "yolo_bbox", "folder_relative": "yolo/bbox",
+      "mapping": "module_maps", "task": "bbox", "imgsz": 640, "labels": ["hand"],
+      "input": "NCHW RGB 0..1 letterboxed to stride32 (640)", "output": "predictions B5xA"
+    },
+    "yolo_bbox_watermark_v11x": {
+      "module": "yolo", "architecture": "YOLO11xDetect", "source_format": "yolo_checkpoint",
+      "source_repo": "yolo11/watermark", "source_file": "yolo11x-train28-best.pt",
+      "filename": "yolo11x-train28-best.safetensors", "hf_path": "yolo/bbox/yolo11x-train28-best.safetensors",
+      "folder_category": "yolo_bbox", "folder_relative": "yolo/bbox",
+      "mapping": "module_maps", "task": "bbox", "imgsz": 1024, "labels": ["watermark"],
+      "input": "NCHW RGB 0..1 letterboxed to stride32 (1024)", "output": "predictions B5xA"
     }
   }
 }

@@ -1,7 +1,9 @@
 from comfy_api.latest import io
-from ..helpers.image_helpers import VIDEO_FRAME_TIMESTAMP_FORMATS
+from nodes import MAX_RESOLUTION
+from ..helpers.image_helpers import VIDEO_FRAME_TIMESTAMP_FORMATS, build_yolo_detectors, run_yolo_detect
 from ..helpers.model_helpers import (
     WHISPER_MODELS, WHISPER_LANGUAGES, load_whisper_model, register_whisper_paths, run_whisper,
+    YOLO_MODELS, load_yolo_model, register_yolo_paths, yolo_forward,
     format_reference_transcript_phrases,
     apply_minimax_h3_refs_to_conditioning,
     create_minimax_h3_audio_ref,
@@ -19,7 +21,10 @@ from ..helpers.model_helpers import (
 import json
 
 WhisperModel = io.Custom("WHISPER_MODEL")
+BBoxDetectorType = io.Custom("BBOX_DETECTOR")
+SegmDetectorType = io.Custom("SEGM_DETECTOR")
 register_whisper_paths()
+register_yolo_paths()
 
 
 class UC_WhisperLoader(io.ComfyNode):
@@ -287,3 +292,67 @@ class UC_SAM3Detect(io.ComfyNode):
     @classmethod
     def execute(cls, model, image, conditioning=None, bboxes=None, positive_coords=None, negative_coords=None, threshold=0.5, refine_iterations=2, edge_padding=True, individual_masks=False):
         return io.NodeOutput(*detect_sam3(model, image, conditioning, bboxes, positive_coords, negative_coords, threshold, refine_iterations, individual_masks, edge_padding))
+
+
+class UC_YOLODetectorLoader(io.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="UC_YOLODetectorLoader", display_name="YOLO Detector Loader", category="image/detection",
+            description="Loads a converted YOLOv8 or YOLO11 bounding-box or segmentation safetensors detector for YOLO Detect or detailer workflows. Missing models download on execution to models/yolo/segm or models/yolo/bbox.",
+            search_aliases=["yolo", "yolov8", "yolo11", "bbox detector", "segm detector", "adetailer", "impact"],
+            inputs=[
+                io.Combo.Input("model_name", options=list(YOLO_MODELS), default="segm/face_yolov8m-seg_60.safetensors",
+                               tooltip="Choose which YOLO detector model to load from models/yolo/segm or models/yolo/bbox. segm/ models produce both bounding boxes and contour masks; bbox/ models produce rectangular bounding boxes. Missing files download on execution."),
+            ],
+            outputs=[
+                BBoxDetectorType.Output("bbox_detector", tooltip="Bounding-box detector for YOLO Detect, FaceDetailer, DetailerForEach, or BboxDetector nodes."),
+                SegmDetectorType.Output("segm_detector", tooltip="Silhouette segmentation detector when a segm/ model is selected; empty placeholder when a bbox/ model is selected."),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, model_name="segm/face_yolov8m-seg_60.safetensors"):
+        return io.NodeOutput(*build_yolo_detectors(load_yolo_model(model_name), yolo_forward))
+
+
+class UC_YOLODetect(io.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="UC_YOLODetect", display_name="YOLO Detect", category="image/detection",
+            description="Detects faces, people, hands, skin, hair, or watermarks across single images or video frame batches using native safetensors YOLOv8 and YOLO11 models, returning masks and bounding boxes.",
+            search_aliases=["yolo", "yolov8", "yolo11", "detect", "segment", "watermark", "face", "hand", "person", "hair", "skin"],
+            inputs=[
+                io.Image.Input("image", tooltip="Image or ordered video-frame batch to scan for target objects."),
+                BBoxDetectorType.Input("bbox_detector", optional=True, tooltip="Connect bbox_detector from YOLO Detector Loader to run bounding-box detection, or as a fallback when segm_detector is disconnected."),
+                SegmDetectorType.Input("segm_detector", optional=True, tooltip="Connect segm_detector from YOLO Detector Loader to run contour segmentation mask detection. Takes priority when both detectors are connected."),
+                io.Float.Input("threshold", default=0.3, min=0.0, max=1.0, step=0.01, tooltip="Minimum confidence required to keep a detection. Raise to reject weak detections; lower to recover faint or partly hidden targets."),
+                io.Float.Input("nms_threshold", default=0.45, min=0.0, max=1.0, step=0.01, tooltip="Overlap limit for removing duplicate boxes on the same object. Lower removes overlapping duplicates more aggressively; higher keeps nearby targets separate."),
+                io.Int.Input("dilation", default=0, min=-512, max=512, step=1, tooltip="Expands or shrinks detected masks in pixels. Positive values grow the mask outward; negative values erode it inward."),
+                io.Int.Input("drop_size", default=10, min=1, max=MAX_RESOLUTION, step=1, tooltip="Ignore detections whose width or height is this many pixels or smaller. Raise to filter tiny specks; lower to keep small distant objects."),
+                io.Int.Input("max_detections", default=300, min=1, max=1000, step=1, tooltip="Maximum detections kept per frame, highest confidence first."),
+                io.Int.Input("batch_size", default=5, min=1, max=64, step=1, tooltip="Maximum images or video frames processed together per network call, including partial tail chunks without padding. Lower if VRAM runs out."),
+                io.Boolean.Input("individual_masks", default=False, tooltip="When off, returns one combined mask per input frame. When on, returns a separate mask for each individual detection."),
+                io.String.Input("labels", default="all", tooltip="Keep all categories with 'all', or enter comma-separated category names (face, person, hand, skin, hair, watermark) to filter detections."),
+                io.Boolean.Input("temporal_filter", default=False, tooltip="Video frames only: fill missed detections on frames where neighboring frames across batch_size chunks confirm the same object. Leave off for unrelated still images."),
+                io.Int.Input("temporal_radius", default=2, min=1, max=30, step=1, tooltip="Temporal filter only: frames to inspect before and after each frame when recovering missed detections (2 checks up to four neighbors across batch_size chunks)."),
+                io.Int.Input("temporal_min_support", default=2, min=1, max=60, step=1, tooltip="Temporal filter only: neighboring frames within temporal_radius that must detect the object to fill a missed frame. Lower recovers longer dropouts; raise to require stronger neighbor agreement."),
+                io.Float.Input("temporal_match_iou", default=0.3, min=0.0, max=1.0, step=0.01, tooltip="Temporal filter only: required box overlap between neighboring frames to match the same object when filling missed frames. Lower for faster movement; raise for stationary objects."),
+            ],
+            outputs=[
+                io.Mask.Output("masks", tooltip="Detected masks at input image dimensions: one combined mask per frame when individual_masks is off, or one mask per detection when on."),
+                io.BoundingBox.Output("bboxes", tooltip="Detected pixel bounding boxes (x, y, width, height) for SAM3 Detect, Extract Bounding Box, Adjust Bounding Box, or Ideogram crop workflows."),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, image, bbox_detector=None, segm_detector=None, threshold=0.3, nms_threshold=0.45, dilation=0,
+                drop_size=10, max_detections=300, batch_size=5, individual_masks=False, labels="all",
+                temporal_filter=False, temporal_radius=2, temporal_min_support=2, temporal_match_iou=0.3):
+        return io.NodeOutput(*run_yolo_detect(
+            image, bbox_detector=bbox_detector, segm_detector=segm_detector, threshold=threshold, nms_threshold=nms_threshold,
+            dilation=dilation, drop_size=drop_size, max_detections=max_detections, batch_size=batch_size,
+            individual_masks=individual_masks, labels=labels, temporal_filter=temporal_filter, temporal_radius=temporal_radius,
+            temporal_min_support=temporal_min_support, temporal_match_iou=temporal_match_iou,
+        ))

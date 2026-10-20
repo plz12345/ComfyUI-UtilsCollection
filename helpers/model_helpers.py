@@ -31,6 +31,7 @@ from ..models.openpose import BodyPoseModel, HandPoseModel, FacePoseModel
 from ..models.yolox import YOLOXDetector
 from ..models.rtmpose import RTMPoseEstimator, AP10KPoseEstimator
 from ..models.densepose import DensePoseModel
+from ..models.yolo import YOLOv8nSeg, YOLOv8mSeg, YOLOv8sDetect, YOLOv8mDetect, YOLO11xDetect
 import math
 import numbers
 import os
@@ -92,7 +93,8 @@ def load_migrated_pose_model(kind, architecture):
     specification = get_model_migration(kind)
     if specification["architecture"] != architecture.__name__:
         raise ValueError(f"Migration architecture mismatch for {kind}")
-    path = download_huggingface_model(MODEL_FOLDER, specification["filename"], MODEL_REPO, specification["hf_path"])
+    category = specification.get("folder_category", MODEL_FOLDER)
+    path = download_huggingface_model(category, specification["filename"], MODEL_REPO, specification["hf_path"])
     return load_pose_safetensors(path, architecture)
 
 
@@ -203,6 +205,69 @@ def densepose_forward(patcher, images, **options):
     comfy.model_management.load_models_gpu([patcher])
     tensor = torch.from_numpy(np.ascontiguousarray(np.stack(images).transpose(0, 3, 1, 2))).to(patcher.load_device)
     return patcher.model(tensor, **options)
+
+
+YOLO_FOLDER = "yolo"
+YOLO_MIGRATIONS = {
+    "segm/face_yolov8m-seg_60.safetensors": ("yolo_segm_face_v8m", YOLOv8mSeg),
+    "segm/person_yolov8m-seg.safetensors": ("yolo_segm_person_v8m", YOLOv8mSeg),
+    "segm/skin_yolov8m-seg_400.safetensors": ("yolo_segm_skin_v8m", YOLOv8mSeg),
+    "segm/hair_yolov8n-seg_60.safetensors": ("yolo_segm_hair_v8n", YOLOv8nSeg),
+    "bbox/face_yolov8m.safetensors": ("yolo_bbox_face_v8m", YOLOv8mDetect),
+    "bbox/hand_yolov8s.safetensors": ("yolo_bbox_hand_v8s", YOLOv8sDetect),
+    "bbox/yolo11x-train28-best.safetensors": ("yolo_bbox_watermark_v11x", YOLO11xDetect),
+}
+YOLO_MODELS = tuple(YOLO_MIGRATIONS)
+_YOLO_ALIASES = {
+    **{name: name for name in YOLO_MIGRATIONS},
+    **{name.removesuffix(".safetensors") + ".pt": name for name in YOLO_MIGRATIONS},
+    **{name.split("/", 1)[1]: name for name in YOLO_MIGRATIONS},
+    **{name.split("/", 1)[1].removesuffix(".safetensors") + ".pt": name for name in YOLO_MIGRATIONS},
+    **{kind: name for name, (kind, _) in YOLO_MIGRATIONS.items()},
+}
+
+
+def register_yolo_paths():
+    for category, relative in (("yolo", ("yolo",)), ("yolo_segm", ("yolo", "segm")), ("yolo_bbox", ("yolo", "bbox"))):
+        folder_paths.add_model_folder_path(category, os.path.join(folder_paths.models_dir, *relative))
+        paths, extensions = folder_paths.folder_names_and_paths[category]
+        folder_paths.folder_names_and_paths[category] = (paths, extensions | {".safetensors"})
+
+
+def get_yolo_model_names():
+    return list(YOLO_MODELS)
+
+
+def resolve_yolo_model_name(model_name):
+    normalized = str(model_name or "").strip().replace("\\", "/")
+    if normalized in _YOLO_ALIASES:
+        return _YOLO_ALIASES[normalized]
+    raise ValueError(f"Unknown YOLO model: {model_name!r}. Available models: {', '.join(YOLO_MODELS)}")
+
+
+def load_yolo_model(model_name):
+    canonical_name = resolve_yolo_model_name(model_name)
+    kind, architecture = YOLO_MIGRATIONS[canonical_name]
+    register_yolo_paths()
+    specification = get_model_migration(kind)
+    patcher = load_migrated_pose_model(kind, architecture)
+    patcher.model.task = specification["task"]
+    patcher.model.imgsz = int(specification["imgsz"])
+    patcher.model.labels = tuple(specification["labels"])
+    patcher.model.model_name = canonical_name
+    return patcher
+
+
+def yolo_forward(patcher, images_nchw):
+    comfy.model_management.throw_exception_if_processing_interrupted()
+    comfy.model_management.load_models_gpu([patcher])
+    patcher.model.eval()
+    dtype = next(patcher.model.parameters()).dtype
+    with torch.no_grad():
+        output = patcher.model(images_nchw.to(device=patcher.load_device, dtype=dtype))
+    if isinstance(output, (tuple, list)):
+        return tuple(value.detach().float() for value in output)
+    return output.detach().float()
 
 
 def _extract_text_prompts(conditioning, device, dtype):

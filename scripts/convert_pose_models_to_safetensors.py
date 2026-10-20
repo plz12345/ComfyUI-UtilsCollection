@@ -44,6 +44,15 @@ def convert(kind, source, destination):
         scripted = torch.jit.load(str(source), map_location="cpu")
         weights = dict(scripted.state_dict())
         del scripted
+    elif specification["source_format"] == "yolo_checkpoint":
+        checkpoint = torch.load(source, map_location="cpu", weights_only=False)
+        source_model = checkpoint.get("ema") or checkpoint.get("model") if isinstance(checkpoint, dict) else checkpoint
+        raw_state = source_model.state_dict() if hasattr(source_model, "state_dict") else dict(source_model)
+        weights = {
+            key: value.float() if value.is_floating_point() else value
+            for key, value in raw_state.items()
+        }
+        del checkpoint, source_model, raw_state
     else:
         weights = torch.load(source, map_location="cpu", weights_only=True)
     with torch.device("meta"):
@@ -79,6 +88,12 @@ def convert(kind, source, destination):
     temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
     metadata = {"architecture": architecture.__name__, "format": "pt", "source_filename": source.name,
                 "source_sha256": sha256_file(source), "kind": kind}
+    if "task" in specification:
+        metadata["task"] = specification["task"]
+    if "imgsz" in specification:
+        metadata["imgsz"] = str(specification["imgsz"])
+    if "labels" in specification:
+        metadata["labels"] = json.dumps(specification["labels"])
     try:
         with IncrementalSafetensorsWriter(str(temporary), metadata=metadata, max_workers=1) as writer:
             for key, value in converted.items():

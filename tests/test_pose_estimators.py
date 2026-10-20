@@ -404,3 +404,154 @@ def test_new_pose_migrations_load_installed_safetensors_without_inference(monkey
                 for suffix in ("weight", "bias"):
                     key = f"{name}.{suffix}"
                     assert torch.equal(loaded[key], source.get_tensor(key))
+
+
+@pytest.mark.parametrize("model_name", model_helpers.YOLO_MODELS)
+@pytest.mark.parametrize("lazy_linear", [False, True])
+def test_yolo_migrations_load_installed_safetensors_without_inference(monkeypatch, model_name, lazy_linear):
+    monkeypatch.setattr(comfy.memory_management, "aimdo_enabled", lazy_linear)
+    model_helpers.register_yolo_paths()
+    for category, directory in (("yolo_segm", r"F:\models\yolo\segm"), ("yolo_bbox", r"F:\models\yolo\bbox")):
+        if pathlib.Path(directory).is_dir():
+            model_helpers.folder_paths.add_model_folder_path(category, directory)
+    kind, architecture = model_helpers.YOLO_MIGRATIONS[model_name]
+    specification = model_helpers.get_model_migration(kind)
+    category = specification.get("folder_category", model_helpers.YOLO_FOLDER)
+    path = model_helpers.folder_paths.get_full_path(category, specification["filename"])
+    if path is None:
+        pytest.skip("Converted local YOLO checkpoint not installed")
+    monkeypatch.setattr(model_helpers.comfy.model_management, "get_torch_device", lambda: torch.device("cpu"))
+    monkeypatch.setattr(model_helpers.comfy.model_management, "unet_offload_device", lambda: torch.device("cpu"))
+    patcher = model_helpers.load_yolo_model(model_name.removesuffix(".safetensors") + ".pt")
+    assert type(patcher.model) is architecture
+    assert patcher.model.task == specification["task"]
+    assert patcher.model.imgsz == specification["imgsz"]
+    assert patcher.model.labels == tuple(specification["labels"])
+    with model_helpers.MemoryEfficientSafeOpen(path, low_memory=True) as source:
+        loaded = patcher.model.state_dict()
+        assert set(loaded) == set(source.keys())
+        first, last = next(iter(loaded)), next(reversed(loaded))
+        assert torch.equal(loaded[first], source.get_tensor(first))
+        assert torch.equal(loaded[last], source.get_tensor(last))
+
+
+def test_yolo_detect_batches_frames_decodes_masks_and_builds_segs():
+    calls = []
+
+    class DummyModel:
+        task = "segm"
+        imgsz = 64
+        labels = ("face",)
+
+    class DummyPatcher:
+        model = DummyModel()
+
+    def forward(patcher, batch_tensor):
+        calls.append(tuple(batch_tensor.shape))
+        batch_size = batch_tensor.shape[0]
+        preds = torch.zeros((batch_size, 37, 84), dtype=torch.float32)
+        protos = torch.zeros((batch_size, 32, 16, 16), dtype=torch.float32)
+        for index in range(batch_size):
+            if batch_tensor[index, 0, 16, 16] > 0.1:
+                preds[index, :4, 10] = torch.tensor([32.0, 32.0, 24.0, 24.0])
+                preds[index, 4, 10] = 0.9
+                preds[index, 5, 10] = 2.0
+                protos[index, 0, 4:12, 4:12] = 2.0
+        return preds, protos
+
+    frames = torch.stack([torch.full((64, 64, 3), value) for value in (0.5, 0.0, 0.5)])
+    bbox_det, segm_det = image_helpers.build_yolo_detectors(DummyPatcher(), forward, batch_size=2)
+    assert segm_det.bbox_detector is bbox_det
+    masks, bboxes = image_helpers.run_yolo_detect(
+        frames,
+        segm_detector=segm_det,
+        threshold=0.3,
+        nms_threshold=0.45,
+        dilation=2,
+        drop_size=5,
+        batch_size=2,
+        individual_masks=False,
+    )
+    assert calls == [(2, 3, 64, 64), (1, 3, 64, 64)]
+    assert masks.shape == (3, 64, 64)
+    assert bool(masks[0].any()) and not bool(masks[1].any()) and bool(masks[2].any())
+    assert len(bboxes) == 3 and len(bboxes[0]) == 1 and bboxes[1] == [] and len(bboxes[2]) == 1
+    assert bboxes[0][0] == {"x": 20, "y": 20, "width": 24, "height": 24}
+
+    indiv_masks, single_boxes = image_helpers.run_yolo_detect(
+        frames[:1],
+        segm_detector=segm_det,
+        individual_masks=True,
+    )
+    assert indiv_masks.shape == (1, 64, 64)
+    assert single_boxes == [{"x": 20, "y": 20, "width": 24, "height": 24}]
+
+    calls.clear()
+    det_segs = bbox_det.detect(frames, 0.3, 0, 1.5, drop_size=4)
+    assert calls == [(2, 3, 64, 64), (1, 3, 64, 64)]
+    assert len(det_segs[1]) == 2 and all(item.label == "face" for item in det_segs[1])
+    assert all(item.cropped_image.shape == (1, 36, 36, 3) for item in det_segs[1])
+    assert bbox_det.detect_combined(frames[1:2], 0.3, 0) is None
+    combined_batch = bbox_det.detect_combined(frames, 0.3, 0)
+    assert combined_batch.shape == (3, 64, 64)
+    assert bool(combined_batch[0].any()) and not bool(combined_batch[1].any()) and bool(combined_batch[2].any())
+
+    # Temporal filtering across batch_size chunks fills missed single-frame dropout detections.
+    video_frames = torch.full((7, 64, 64, 3), 0.5)
+    seen = {"offset": 0}
+
+    def video_forward(patcher, batch_tensor):
+        bs = batch_tensor.shape[0]
+        preds = torch.zeros((bs, 5, 84), dtype=torch.float32)
+        for idx in range(bs):
+            frame_idx = seen["offset"] + idx
+            if frame_idx != 3:
+                preds[idx, :4, 10] = torch.tensor([20.0, 20.0, 16.0, 16.0])
+                preds[idx, 4, 10] = 0.9
+        seen["offset"] += bs
+        return preds
+
+    class DummyBBoxPatcher:
+        class model:
+            task = "bbox"
+            imgsz = 64
+            labels = ("watermark",)
+
+    video_bbox_det, _ = image_helpers.build_yolo_detectors(DummyBBoxPatcher(), video_forward)
+    results_by_chunk = []
+    for chunk_sz in (2, 5):
+        seen["offset"] = 0
+        results_by_chunk.append(
+            image_helpers.run_yolo_detect(
+                video_frames,
+                bbox_detector=video_bbox_det,
+                batch_size=chunk_sz,
+                temporal_filter=True,
+                temporal_radius=2,
+                temporal_min_support=2,
+                temporal_match_iou=0.3,
+            )
+        )
+    assert torch.equal(results_by_chunk[0][0], results_by_chunk[1][0])
+    assert results_by_chunk[0][1] == results_by_chunk[1][1]
+    assert all(len(frame_boxes) == 1 for frame_boxes in results_by_chunk[0][1])
+    assert bool(results_by_chunk[0][0][3, 20, 20])
+
+
+def test_yolo_dfl_and_c2psa_forward_math():
+    from utils_collection_pose_test.models.yolo import _C2PSA, _DFL
+
+    dfl = _DFL(4, operations=torch.nn)
+    with torch.no_grad():
+        dfl.conv.weight.copy_(torch.arange(4, dtype=torch.float32).view(1, 4, 1, 1))
+    logits = torch.full((1, 16, 2), -100.0)
+    for side, bin_idx in enumerate((0, 1, 2, 3)):
+        logits[0, side * 4 + bin_idx, :] = 100.0
+    decoded = dfl(logits)
+    torch.testing.assert_close(decoded[0, :, 0], torch.tensor([0.0, 1.0, 2.0, 3.0]), atol=1e-4, rtol=1e-4)
+
+    psa = _C2PSA(128, 128, depth=1, operations=torch.nn).eval()
+    sample = torch.zeros((1, 128, 4, 4), dtype=torch.float32)
+    out = psa(sample)
+    assert out.shape == (1, 128, 4, 4)
+

@@ -61,3 +61,4 @@ against the checkpoint as well.
   separate reported results. Do not claim a speedup from batch-call counts alone.
 - Commit coherent model/integration increments; leave unfinished ports unstaged.
 - For the next model, repeat the same gates instead of copying an unverified port.
+- YOLOv8/YOLO11 migrations (`source_format: "yolo_checkpoint"` in `models/migrations.json`) use `models/yolo.py`, install into `models/yolo/segm` and `models/yolo/bbox`, and store converted `.safetensors` under `yolo/segm/` and `yolo/bbox/` in `silveroxides/ComfyUI-UtilsCollection-Models`.

@@ -207,6 +207,8 @@ class SamplingUtils(ComfyExtension):
             UC_LoraStack,
             UC_SAM31CheckpointLoader,
             UC_SAM3Detect,
+            UC_YOLODetectorLoader,
+            UC_YOLODetect,
             UC_LoadImageWithAlpha,
             UC_LoadLaMaModel,
             UC_WhisperLoader,

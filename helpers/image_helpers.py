@@ -7,6 +7,7 @@ import logging
 import queue
 import tempfile
 import threading
+from collections import namedtuple
 from contextlib import closing, contextmanager
 from pathlib import Path
 import uuid
@@ -28,6 +29,7 @@ import cv2
 import numpy as np
 import torch
 import torchaudio
+from torchvision.ops import nms as torchvision_nms
 from nodes import MAX_RESOLUTION
 
 from .helper_functions import ASPECT_RATIOS, resize_nchw
@@ -704,6 +706,487 @@ def run_densepose_batch(images, resolution=0, batch_size=2, cmap="viridis", *, l
             output[start + index] = torch.from_numpy(render_densepose_frame(result, height, width, cmap)).float().div_(255)
             progress.update(1)
     return output
+
+
+SEG = namedtuple("SEG", ["cropped_image", "cropped_mask", "confidence", "crop_region", "bbox", "label", "control_net_wrapper"], defaults=[None])
+
+
+class NO_BBOX_DETECTOR:
+    pass
+
+
+class NO_SEGM_DETECTOR:
+    pass
+
+
+def _yolo_letterbox_geometry(height, width, imgsz=640, stride=32):
+    ratio = min(imgsz / height, imgsz / width)
+    unpad_w, unpad_h = round(width * ratio), round(height * ratio)
+    dw, dh = ((imgsz - unpad_w) % stride) / 2.0, ((imgsz - unpad_h) % stride) / 2.0
+    top, bottom = round(dh - 0.1), round(dh + 0.1)
+    left, right = round(dw - 0.1), round(dw + 0.1)
+    return ratio, (unpad_h, unpad_w), left, top, bottom, right, (height, width)
+
+
+def letterbox_yolo_frame(image_rgb_uint8, imgsz=640, stride=32):
+    height, width = image_rgb_uint8.shape[:2]
+    ratio, (unpad_h, unpad_w), left, top, bottom, right, orig_size = _yolo_letterbox_geometry(height, width, imgsz, stride)
+    resized = cv2.resize(image_rgb_uint8, (unpad_w, unpad_h), interpolation=cv2.INTER_LINEAR) if (width, height) != (unpad_w, unpad_h) else image_rgb_uint8
+    padded = cv2.copyMakeBorder(resized, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114))
+    tensor = torch.from_numpy(np.ascontiguousarray(padded.transpose(2, 0, 1), dtype=np.float32)).div_(255.0)
+    return tensor, (ratio, left, top, bottom, right, orig_size)
+
+
+def letterbox_yolo_batch(images_nhwc, imgsz=640, stride=32):
+    height, width = int(images_nhwc.shape[1]), int(images_nhwc.shape[2])
+    ratio, (unpad_h, unpad_w), left, top, bottom, right, orig_size = _yolo_letterbox_geometry(height, width, imgsz, stride)
+    nchw = images_nhwc[..., :3].detach().movedim(-1, 1).float().clamp_(0.0, 1.0)
+    if (height, width) != (unpad_h, unpad_w):
+        nchw = torch.nn.functional.interpolate(nchw, size=(unpad_h, unpad_w), mode="bilinear", align_corners=False)
+    if left or right or top or bottom:
+        nchw = torch.nn.functional.pad(nchw, (left, right, top, bottom), mode="constant", value=114.0 / 255.0)
+    return nchw.contiguous(), [(ratio, left, top, bottom, right, orig_size)] * len(images_nhwc)
+
+
+def decode_yolo_predictions(prediction, proto, pad_meta, labels=("object",), confidence_threshold=0.3, nms_threshold=0.45, max_detections=300, use_segm=True):
+    ratio, left, top, bottom, right, (orig_h, orig_w) = pad_meta
+    nc = max(1, len(labels))
+    extra = max(0, prediction.shape[0] - 4 - nc)
+    transposed = prediction.transpose(0, 1)
+    max_scores, class_ids = transposed[:, 4:4 + nc].max(dim=1)
+    valid = max_scores > confidence_threshold
+    if not valid.any():
+        return []
+    transposed, scores, class_ids = transposed[valid], max_scores[valid], class_ids[valid]
+    if scores.numel() > 30000:
+        order = scores.argsort(descending=True)[:30000]
+        transposed, scores, class_ids = transposed[order], scores[order], class_ids[order]
+    cx, cy, bw, bh = transposed[:, :4].unbind(dim=1)
+    boxes_pad = torch.stack((cx - bw * 0.5, cy - bh * 0.5, cx + bw * 0.5, cy + bh * 0.5), dim=1)
+    mask_coeffs = transposed[:, 4 + nc:4 + nc + extra]
+    keep = torchvision_nms(boxes_pad + class_ids.unsqueeze(1).float() * 7680.0, scores, nms_threshold)[:max_detections]
+    boxes_pad, scores, class_ids, mask_coeffs = boxes_pad[keep], scores[keep], class_ids[keep], mask_coeffs[keep]
+
+    boxes_orig = boxes_pad.clone()
+    boxes_orig[:, [0, 2]] = ((boxes_orig[:, [0, 2]] - left) / ratio).clamp_(0.0, float(orig_w))
+    boxes_orig[:, [1, 3]] = ((boxes_orig[:, [1, 3]] - top) / ratio).clamp_(0.0, float(orig_h))
+    boxes_np = boxes_orig.detach().cpu().numpy().astype(np.float32)
+    scores_np = scores.detach().cpu().numpy().astype(np.float32)
+    class_ids_list = class_ids.detach().cpu().tolist()
+
+    if use_segm and proto is not None and extra > 0:
+        nm, mh, mw = proto.shape
+        pad_h, pad_w = round(orig_h * ratio) + top + bottom, round(orig_w * ratio) + left + right
+        raw_masks = (mask_coeffs @ proto.float().reshape(nm, -1)).reshape(-1, mh, mw)
+        pboxes = boxes_pad * torch.tensor([mw / pad_w, mh / pad_h, mw / pad_w, mh / pad_h], device=boxes_pad.device, dtype=boxes_pad.dtype)
+        px1, py1, px2, py2 = pboxes.unsqueeze(-1).chunk(4, dim=1)
+        rx = torch.arange(mw, device=raw_masks.device, dtype=boxes_pad.dtype).view(1, 1, mw)
+        ry = torch.arange(mh, device=raw_masks.device, dtype=boxes_pad.dtype).view(1, mh, 1)
+        cropped_proto = raw_masks * ((rx >= px1) & (rx < px2) & (ry >= py1) & (ry < py2))
+        results = []
+        for start in range(0, len(boxes_np), 16):
+            sub_proto = cropped_proto[start:start + 16]
+            upsampled = torch.nn.functional.interpolate(sub_proto.unsqueeze(1), size=(pad_h, pad_w), mode="bilinear", align_corners=False).squeeze(1)
+            unpadded = (upsampled > 0.0).float()[:, top:pad_h - bottom, left:pad_w - right]
+            scaled = torch.nn.functional.interpolate(unpadded.unsqueeze(1), size=(orig_h, orig_w), mode="bilinear", align_corners=False).squeeze(1)
+            scaled_u8 = (scaled > 0.5).to(torch.uint8).cpu().numpy()
+            for offset in range(len(sub_proto)):
+                idx = start + offset
+                bbox, score, cls_idx = boxes_np[idx], float(scores_np[idx]), class_ids_list[idx]
+                ix1, iy1 = max(0, min(orig_w, int(np.floor(bbox[0])))), max(0, min(orig_h, int(np.floor(bbox[1]))))
+                ix2, iy2 = max(0, min(orig_w, int(np.ceil(bbox[2])))), max(0, min(orig_h, int(np.ceil(bbox[3]))))
+                if ix2 <= ix1 or iy2 <= iy1:
+                    continue
+                crop_u8 = np.ascontiguousarray(scaled_u8[offset, iy1:iy2, ix1:ix2])
+                if not crop_u8.any():
+                    continue
+                label = labels[cls_idx] if 0 <= cls_idx < len(labels) else str(cls_idx)
+                results.append({"bbox": bbox, "confidence": score, "class_id": cls_idx, "label": label, "mask_crop": crop_u8, "mask_box": (ix1, iy1, ix2, iy2)})
+        return results
+
+    results = []
+    for bbox, score, cls_idx in zip(boxes_np, scores_np, class_ids_list):
+        ix1, iy1 = max(0, min(orig_w, int(bbox[0]))), max(0, min(orig_h, int(bbox[1])))
+        ix2, iy2 = max(0, min(orig_w, int(bbox[2]))), max(0, min(orig_h, int(bbox[3])))
+        label = labels[cls_idx] if 0 <= cls_idx < len(labels) else str(cls_idx)
+        results.append({"bbox": bbox, "confidence": float(score), "class_id": cls_idx, "label": label, "mask_crop": None, "mask_box": (ix1, iy1, ix2, iy2)})
+    return results
+
+
+def dilate_yolo_mask(mask, dilation):
+    if dilation == 0:
+        return mask.astype(np.float32, copy=False)
+    kernel = np.ones((abs(int(dilation)), abs(int(dilation))), np.uint8)
+    op = cv2.dilate if dilation > 0 else cv2.erode
+    return op(mask.astype(np.float32, copy=False), kernel, iterations=1).astype(np.float32, copy=False)
+
+
+def _local_detection_mask(det, height, width, dilation=0):
+    if "mask" in det and det["mask"] is not None:
+        return 0, 0, width, height, dilate_yolo_mask(det["mask"], dilation)
+    ix1, iy1, ix2, iy2 = det["mask_box"]
+    if ix2 <= ix1 or iy2 <= iy1:
+        return None
+    pad = abs(int(dilation))
+    px1, py1, px2, py2 = max(0, ix1 - pad), max(0, iy1 - pad), min(width, ix2 + pad), min(height, iy2 + pad)
+    local = np.zeros((py2 - py1, px2 - px1), dtype=np.float32)
+    crop_u8 = det.get("mask_crop")
+    local[iy1 - py1:iy2 - py1, ix1 - px1:ix2 - px1] = 1.0 if crop_u8 is None else crop_u8.astype(np.float32)
+    if dilation != 0:
+        local = dilate_yolo_mask(local, dilation)
+    return px1, py1, px2, py2, local
+
+
+def _paste_detection_mask(target, det, dilation=0):
+    region = _local_detection_mask(det, target.shape[0], target.shape[1], dilation)
+    if region is not None:
+        px1, py1, px2, py2, local = region
+        target[py1:py2, px1:px2] = np.maximum(target[py1:py2, px1:px2], local)
+
+
+def _materialize_detection_mask(det, height, width, dilation=0):
+    full = torch.zeros((height, width), dtype=torch.float32)
+    region = _local_detection_mask(det, height, width, dilation)
+    if region is not None:
+        px1, py1, px2, py2, local = region
+        full[py1:py2, px1:px2] = torch.from_numpy(local)
+    return full
+
+
+def _normalize_crop_interval(limit, start, size):
+    if start < 0:
+        return 0, int(min(limit, size))
+    if start + size > limit:
+        return int(max(0, limit - size)), int(limit)
+    return int(start), int(min(limit, start + size))
+
+
+def make_yolo_crop_region(width, height, bbox, crop_factor, crop_min_size=None):
+    x1, y1, x2, y2 = float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])
+    bbox_w, bbox_h = x2 - x1, y2 - y1
+    crop_w, crop_h = bbox_w * crop_factor, bbox_h * crop_factor
+    if crop_min_size is not None:
+        crop_w, crop_h = max(crop_min_size, crop_w), max(crop_min_size, crop_h)
+    center_x, center_y = x1 + bbox_w * 0.5, y1 + bbox_h * 0.5
+    nx1, nx2 = _normalize_crop_interval(width, int(center_x - crop_w * 0.5), crop_w)
+    ny1, ny2 = _normalize_crop_interval(height, int(center_y - crop_h * 0.5), crop_h)
+    return [nx1, ny1, nx2, ny2]
+
+
+def _filter_allowed_labels(labels_spec):
+    if labels_spec is None:
+        return None
+    items = [entry.strip() for entry in str(labels_spec).split(",") if entry.strip()]
+    return None if not items or "all" in {item.lower() for item in items} else set(items)
+
+
+def _iter_yolo_batch(patcher, images, forward, threshold=0.3, nms_threshold=0.45, max_detections=300, batch_size=5, use_segm=True, progress=None):
+    imgsz = getattr(patcher.model, "imgsz", 640)
+    labels = getattr(patcher.model, "labels", ("object",))
+    use_segm = bool(use_segm and getattr(patcher.model, "task", "bbox") == "segm")
+    for start in range(0, len(images), batch_size):
+        comfy.model_management.throw_exception_if_processing_interrupted()
+        chunk = images[start:start + batch_size]
+        batch_tensor, metas = letterbox_yolo_batch(chunk, imgsz=imgsz)
+        raw_out = forward(patcher, batch_tensor)
+        preds, protos = raw_out if isinstance(raw_out, tuple) else (raw_out, None)
+        if len(preds) != len(chunk):
+            raise ValueError("YOLO model did not preserve the frame batch order.")
+        for index, meta in enumerate(metas):
+            proto = protos[index] if protos is not None else None
+            yield decode_yolo_predictions(
+                preds[index], proto, meta, labels=labels, confidence_threshold=threshold,
+                nms_threshold=nms_threshold, max_detections=max_detections, use_segm=use_segm,
+            )
+            if progress is not None:
+                progress.update(1)
+
+
+def _infer_yolo_batch(patcher, images, forward, threshold=0.3, nms_threshold=0.45, max_detections=300, batch_size=5, use_segm=True, progress=None):
+    return list(_iter_yolo_batch(
+        patcher, images, forward, threshold=threshold, nms_threshold=nms_threshold,
+        max_detections=max_detections, batch_size=batch_size, use_segm=use_segm, progress=progress,
+    ))
+
+
+def _interpolate_mask_crop(det_prev, det_next, alpha, box_coords):
+    ix1, iy1, ix2, iy2 = box_coords
+    target_h, target_w = iy2 - iy1, ix2 - ix1
+    if target_h <= 0 or target_w <= 0:
+        return None
+    crop_prev = det_prev.get("mask_crop")
+    crop_next = det_next.get("mask_crop") if det_next is not None else None
+    if crop_prev is None and crop_next is None:
+        return None
+    if crop_prev is not None and crop_next is not None:
+        resized_prev = cv2.resize(crop_prev.astype(np.float32), (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+        resized_next = cv2.resize(crop_next.astype(np.float32), (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+        blended = (1.0 - alpha) * resized_prev + alpha * resized_next
+        return np.ascontiguousarray((blended >= 0.5).astype(np.uint8))
+    source = crop_prev if crop_prev is not None else crop_next
+    resized = cv2.resize(source.astype(np.float32), (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+    return np.ascontiguousarray((resized >= 0.5).astype(np.uint8))
+
+
+def _box_iou_single(box_a, box_b):
+    ix1, iy1 = max(float(box_a[0]), float(box_b[0])), max(float(box_a[1]), float(box_b[1]))
+    ix2, iy2 = min(float(box_a[2]), float(box_b[2])), min(float(box_a[3]), float(box_b[3]))
+    inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+    if inter <= 0.0:
+        return 0.0
+    area_a = max(0.0, float(box_a[2]) - float(box_a[0])) * max(0.0, float(box_a[3]) - float(box_a[1]))
+    area_b = max(0.0, float(box_b[2]) - float(box_b[0])) * max(0.0, float(box_b[3]) - float(box_b[1]))
+    return inter / max(area_a + area_b - inter, 1e-8)
+
+
+def fill_temporal_yolo_detections(batch_detections, height, width, radius=2, min_support=2, match_iou=0.3):
+    """Fill missed detections on frames where neighboring frames within radius confirm the object."""
+    if radius < 1 or min_support < 1 or not (0.0 <= match_iou <= 1.0):
+        raise ValueError("Temporal filtering requires positive radius/support and matching IoU between 0.0 and 1.0.")
+    num_frames = len(batch_detections)
+    if num_frames < 2:
+        return batch_detections
+
+    filled = [list(frame_dets) for frame_dets in batch_detections]
+    for frame_idx in range(num_frames):
+        win_start, win_end = max(0, frame_idx - radius), min(num_frames - 1, frame_idx + radius)
+        available = (frame_idx - win_start) + (win_end - frame_idx)
+        if available < 1:
+            continue
+        required = min(min_support, available)
+        clusters = []
+        for neighbor_idx in range(win_start, win_end + 1):
+            if neighbor_idx == frame_idx:
+                continue
+            for det in batch_detections[neighbor_idx]:
+                best_cluster, best_iou = None, match_iou
+                for cluster in clusters:
+                    if cluster["label"] != det["label"] or neighbor_idx in cluster["by_frame"]:
+                        continue
+                    iou = max(_box_iou_single(det["bbox"], member["bbox"]) for member in cluster["by_frame"].values())
+                    if iou >= best_iou:
+                        best_iou, best_cluster = iou, cluster
+                if best_cluster is None:
+                    clusters.append({"label": det["label"], "class_id": det["class_id"], "by_frame": {neighbor_idx: det}})
+                else:
+                    best_cluster["by_frame"][neighbor_idx] = det
+
+        for cluster in clusters:
+            by_frame = cluster["by_frame"]
+            if len(by_frame) < required:
+                continue
+            prev_frames = [n for n in by_frame if n < frame_idx]
+            next_frames = [n for n in by_frame if n > frame_idx]
+            if prev_frames and next_frames:
+                prev_n, next_n = max(prev_frames), min(next_frames)
+                det_prev, det_next = by_frame[prev_n], by_frame[next_n]
+                alpha = float(frame_idx - prev_n) / float(next_n - prev_n)
+                bbox = ((1.0 - alpha) * np.asarray(det_prev["bbox"], dtype=np.float32) + alpha * np.asarray(det_next["bbox"], dtype=np.float32)).astype(np.float32)
+                confidence = float((1.0 - alpha) * det_prev["confidence"] + alpha * det_next["confidence"])
+            else:
+                nearest_n = min(by_frame, key=lambda n: abs(n - frame_idx))
+                det_prev, det_next, alpha = by_frame[nearest_n], None, 0.0
+                bbox = np.asarray(det_prev["bbox"], dtype=np.float32).copy()
+                confidence = float(det_prev["confidence"])
+
+            if any(existing["label"] == cluster["label"] and _box_iou_single(existing["bbox"], bbox) >= match_iou for existing in filled[frame_idx]):
+                continue
+            ix1, iy1 = max(0, min(width, int(np.floor(bbox[0])))), max(0, min(height, int(np.floor(bbox[1]))))
+            ix2, iy2 = max(0, min(width, int(np.ceil(bbox[2])))), max(0, min(height, int(np.ceil(bbox[3]))))
+            if ix2 <= ix1 or iy2 <= iy1:
+                continue
+            mask_crop = _interpolate_mask_crop(det_prev, det_next, alpha, (ix1, iy1, ix2, iy2))
+            if mask_crop is not None and not mask_crop.any():
+                continue
+            filled[frame_idx].append({
+                "bbox": bbox, "confidence": confidence, "class_id": cluster["class_id"],
+                "label": cluster["label"], "mask_crop": mask_crop, "mask_box": (ix1, iy1, ix2, iy2),
+            })
+    return filled
+
+
+def _detections_to_segs(frame_tensor, detections, dilation=0, crop_factor=3.0, drop_size=1, detailer_hook=None, allowed_labels=None):
+    drop_size = max(int(drop_size), 1)
+    height, width = frame_tensor.shape[1], frame_tensor.shape[2]
+    items = []
+    for det in detections:
+        if allowed_labels is not None and det["label"] not in allowed_labels:
+            continue
+        bbox = det["bbox"]
+        x1, y1, x2, y2 = float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])
+        if (x2 - x1) > drop_size and (y2 - y1) > drop_size:
+            crop_region = make_yolo_crop_region(width, height, bbox, crop_factor)
+            if detailer_hook is not None and hasattr(detailer_hook, "post_crop_region"):
+                crop_region = detailer_hook.post_crop_region(width, height, bbox, crop_region)
+            cx1, cy1, cx2, cy2 = crop_region
+            cropped_mask = np.zeros((cy2 - cy1, cx2 - cx1), dtype=np.float32)
+            region = _local_detection_mask(det, height, width, dilation)
+            if region is not None:
+                px1, py1, px2, py2, local = region
+                ox1, oy1, ox2, oy2 = max(px1, cx1), max(py1, cy1), min(px2, cx2), min(py2, cy2)
+                if ox2 > ox1 and oy2 > oy1:
+                    cropped_mask[oy1 - cy1:oy2 - cy1, ox1 - cx1:ox2 - cx1] = local[oy1 - py1:oy2 - py1, ox1 - px1:ox2 - px1]
+            items.append(SEG(frame_tensor[:, cy1:cy2, cx1:cx2, :], cropped_mask, det["confidence"], crop_region, bbox, det["label"], None))
+    segs = ((height, width), items)
+    if detailer_hook is not None and hasattr(detailer_hook, "post_detection"):
+        segs = detailer_hook.post_detection(segs)
+    return segs
+
+
+def _detections_to_combined_mask(detections, height, width, dilation=0, allowed_labels=None):
+    combined = None
+    for det in detections:
+        if allowed_labels is not None and det["label"] not in allowed_labels:
+            continue
+        if combined is None:
+            combined = np.zeros((height, width), dtype=np.float32)
+        _paste_detection_mask(combined, det, dilation)
+    return torch.from_numpy(combined) if combined is not None and combined.any() else None
+
+
+class UCBBoxDetector:
+    """BBOX_DETECTOR adapter backed by a ComfyUI CoreModelPatcher."""
+
+    use_segm = False
+
+    def __init__(self, patcher, forward, batch_size=5):
+        self.patcher = patcher
+        self.bbox_model = patcher
+        self.forward = forward
+        self.batch_size = max(1, int(batch_size))
+        self.aux = None
+
+    def detect(self, image, threshold, dilation, crop_factor, drop_size=1, detailer_hook=None, nms_threshold=0.45, max_detections=300, batch_size=None):
+        frames = image if image.ndim == 4 else image.unsqueeze(0)
+        chunk_size = max(1, int(batch_size or self.batch_size))
+        progress = comfy.utils.ProgressBar(len(frames))
+        height, width = frames.shape[1], frames.shape[2]
+        items = []
+        for index, detections in enumerate(_iter_yolo_batch(
+            self.patcher, frames, self.forward, threshold=threshold, nms_threshold=nms_threshold,
+            max_detections=max_detections, batch_size=chunk_size, use_segm=self.use_segm, progress=progress,
+        )):
+            items.extend(_detections_to_segs(frames[index:index + 1], detections, dilation=dilation, crop_factor=crop_factor, drop_size=drop_size)[1])
+        segs = ((height, width), items)
+        if detailer_hook is not None and hasattr(detailer_hook, "post_detection"):
+            segs = detailer_hook.post_detection(segs)
+        return segs
+
+    def detect_combined(self, image, threshold, dilation, nms_threshold=0.45, max_detections=300, batch_size=None):
+        frames = image if image.ndim == 4 else image.unsqueeze(0)
+        chunk_size = max(1, int(batch_size or self.batch_size))
+        height, width = frames.shape[1], frames.shape[2]
+        progress = comfy.utils.ProgressBar(len(frames))
+        frame_iter = _iter_yolo_batch(
+            self.patcher, frames, self.forward, threshold=threshold, nms_threshold=nms_threshold,
+            max_detections=max_detections, batch_size=chunk_size, use_segm=self.use_segm, progress=progress,
+        )
+        if len(frames) == 1:
+            return _detections_to_combined_mask(next(frame_iter), height, width, dilation=dilation)
+        masks, any_detected = [], False
+        for detections in frame_iter:
+            mask = _detections_to_combined_mask(detections, height, width, dilation=dilation)
+            any_detected = any_detected or (mask is not None)
+            masks.append(mask if mask is not None else torch.zeros((height, width), dtype=torch.float32))
+        return torch.stack(masks, dim=0) if any_detected else None
+
+    def setAux(self, x):
+        self.aux = x
+
+
+class UCSegmDetector(UCBBoxDetector):
+    """SEGM_DETECTOR adapter backed by a ComfyUI CoreModelPatcher."""
+
+    use_segm = True
+
+    def __init__(self, patcher, forward, bbox_detector=None, batch_size=5):
+        super().__init__(patcher, forward, batch_size=batch_size)
+        self.bbox_detector = bbox_detector
+
+
+def build_yolo_detectors(patcher, forward, batch_size=5):
+    bbox_detector = UCBBoxDetector(patcher, forward, batch_size=batch_size)
+    if getattr(patcher.model, "task", "bbox") == "segm":
+        return bbox_detector, UCSegmDetector(patcher, forward, bbox_detector=bbox_detector, batch_size=batch_size)
+    return bbox_detector, NO_SEGM_DETECTOR()
+
+
+def run_yolo_detect(images, *, bbox_detector=None, segm_detector=None, threshold=0.3, nms_threshold=0.45,
+                    dilation=0, drop_size=10, max_detections=300, batch_size=5,
+                    individual_masks=False, labels="all", temporal_filter=False, temporal_radius=2,
+                    temporal_min_support=2, temporal_match_iou=0.3):
+    if not torch.is_tensor(images) or images.ndim != 4 or not len(images) or images.shape[-1] not in (3, 4):
+        raise ValueError("YOLO Detect requires a nonempty RGB or RGBA IMAGE batch.")
+    if not (0.0 <= threshold <= 1.0 and 0.0 <= nms_threshold <= 1.0):
+        raise ValueError("Detection and NMS thresholds must be between 0.0 and 1.0.")
+    if batch_size < 1 or max_detections < 1:
+        raise ValueError("batch_size and max_detections must be at least 1.")
+    if temporal_filter and (temporal_radius < 1 or temporal_min_support < 1 or not (0.0 <= temporal_match_iou <= 1.0)):
+        raise ValueError("Temporal filtering requires positive radius/support and matching IoU between 0.0 and 1.0.")
+
+    allowed_labels = _filter_allowed_labels(labels)
+    active_detector = (
+        segm_detector if segm_detector is not None and not isinstance(segm_detector, NO_SEGM_DETECTOR)
+        else bbox_detector if bbox_detector is not None and not isinstance(bbox_detector, NO_BBOX_DETECTOR) else None
+    )
+    if active_detector is None:
+        raise ValueError("Connect a valid bbox_detector or segm_detector from YOLO Detector Loader to YOLO Detect.")
+    height, width = images.shape[1], images.shape[2]
+
+    if not hasattr(active_detector, "patcher"):
+        frame = images[:1]
+        segs = active_detector.detect(frame, threshold, dilation, 1.0, drop_size)
+        kept_items = [item for item in segs[1] if allowed_labels is None or getattr(item, "label", None) in allowed_labels]
+        bboxes_out, indiv_masks = [], []
+        for item in kept_items:
+            bx1, by1, bx2, by2 = (int(round(float(v))) for v in item.bbox)
+            bboxes_out.append({"x": bx1, "y": by1, "width": max(1, bx2 - bx1), "height": max(1, by2 - by1)})
+            full_mask = torch.zeros((height, width), dtype=torch.float32)
+            cx1, cy1, cx2, cy2 = item.crop_region
+            full_mask[cy1:cy2, cx1:cx2] = torch.as_tensor(item.cropped_mask, dtype=torch.float32)
+            indiv_masks.append(full_mask)
+        if individual_masks:
+            masks_tensor = torch.stack(indiv_masks, dim=0) if indiv_masks else torch.zeros((1, height, width), dtype=torch.float32)
+        else:
+            masks_tensor = torch.stack(indiv_masks, dim=0).amax(dim=0, keepdim=True) if indiv_masks else torch.zeros((1, height, width), dtype=torch.float32)
+        return masks_tensor, bboxes_out
+
+    patcher, forward = active_detector.patcher, active_detector.forward
+    use_segm = bool(getattr(active_detector, "use_segm", getattr(patcher.model, "task", "bbox") == "segm"))
+    progress = comfy.utils.ProgressBar(len(images))
+    detections_source = _iter_yolo_batch(
+        patcher, images, forward, threshold=threshold, nms_threshold=nms_threshold,
+        max_detections=max_detections, batch_size=batch_size, use_segm=use_segm, progress=progress,
+    )
+    if temporal_filter:
+        detections_source = fill_temporal_yolo_detections(list(detections_source), height, width, radius=temporal_radius, min_support=temporal_min_support, match_iou=temporal_match_iou)
+
+    frame_masks, individual_mask_list, frame_bboxes = [], [], []
+    drop_size_int = max(int(drop_size), 1)
+    for detections in detections_source:
+        boxes_for_frame = []
+        combined = None if individual_masks else np.zeros((height, width), dtype=np.float32)
+        for det in detections:
+            if allowed_labels is not None and det["label"] not in allowed_labels:
+                continue
+            bbox = det["bbox"]
+            x1, y1, x2, y2 = float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])
+            if (x2 - x1) <= drop_size_int or (y2 - y1) <= drop_size_int:
+                continue
+            if individual_masks:
+                individual_mask_list.append(_materialize_detection_mask(det, height, width, dilation))
+            else:
+                _paste_detection_mask(combined, det, dilation)
+            ix1, iy1 = max(0, int(round(x1))), max(0, int(round(y1)))
+            ix2, iy2 = min(width, int(round(x2))), min(height, int(round(y2)))
+            boxes_for_frame.append({"x": ix1, "y": iy1, "width": max(1, ix2 - ix1), "height": max(1, iy2 - iy1)})
+        if not individual_masks:
+            frame_masks.append(torch.from_numpy(combined))
+        frame_bboxes.append(boxes_for_frame)
+
+    masks_out = (torch.stack(individual_mask_list, dim=0) if individual_mask_list else torch.zeros((1, height, width), dtype=torch.float32)) if individual_masks else torch.stack(frame_masks, dim=0)
+    bboxes_out = frame_bboxes[0] if len(images) == 1 else frame_bboxes
+    return masks_out, bboxes_out
 
 
 def _hash_stream(stream):
