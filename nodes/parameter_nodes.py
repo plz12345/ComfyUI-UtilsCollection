@@ -31,7 +31,7 @@ class UC_AdjustedResolutionParameters(io.ComfyNode):
                     default=1.0,
                     min=0.0,
                     max=10.0,
-                    step=0.125,
+                    step=0.1,
                     tooltip="Scale used for the larger output resolution.",
                 ),
                 io.Int.Input(
@@ -89,7 +89,7 @@ class UC_ResolutionSelectorExtended(io.ComfyNode):
                     default=1.0,
                     min=0.1,
                     max=16.0,
-                    step=0.125,
+                    step=0.0125,
                     tooltip="Target total megapixels. 1.0 MP ≈ 1024×1024 for square.",
                 ),
                 io.Int.Input(
@@ -154,7 +154,7 @@ class UC_VideoResolutionSelector(io.ComfyNode):
                     default=1.0,
                     min=0.1,
                     max=16.0,
-                    step=0.125,
+                    step=0.0125,
                     tooltip="Nominal target total megapixels used to choose the nearest viable resolution.",
                 ),
                 io.Int.Input(
@@ -222,7 +222,7 @@ class UC_ImageScaleAndResolutionPicker(io.ComfyNode):
                     default=AspectRatio.SQUARE,
                     tooltip="The aspect ratio for the output dimensions and cropping.",
                 ),
-                io.Float.Input("megapixels", default=1.0, min=0.01, max=16.0, step=0.125),
+                io.Float.Input("megapixels", default=1.0, min=0.01, max=16.0, step=0.0125),
                 io.Int.Input(
                     "resolution_steps",
                     default=1,
@@ -341,7 +341,7 @@ class UC_VideoResolutionAndLengthPicker(io.ComfyNode):
                     default=AspectRatio.SQUARE,
                     tooltip="The aspect ratio for the output dimensions and cropping.",
                 ),
-                io.Float.Input("megapixels", default=1.0, min=0.01, max=16.0, step=0.125),
+                io.Float.Input("megapixels", default=1.0, min=0.01, max=16.0, step=0.0125),
                 io.Int.Input(
                     "resolution_steps",
                     default=1,
