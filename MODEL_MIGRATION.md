@@ -62,3 +62,4 @@ against the checkpoint as well.
 - Commit coherent model/integration increments; leave unfinished ports unstaged.
 - For the next model, repeat the same gates instead of copying an unverified port.
 - YOLOv8/YOLO11 migrations (`source_format: "yolo_checkpoint"` in `models/migrations.json`) use `models/yolo.py`, install into `models/yolo/segm` and `models/yolo/bbox`, and store converted `.safetensors` under `yolo/segm/` and `yolo/bbox/` in `silveroxides/ComfyUI-UtilsCollection-Models`.
+- Depth Anything 3 migrations (`source_format: "safetensors"` in `models/migrations.json`) use `models/depth_anything.py`, place checkpoints in `models/depthanything3`, and store converted `.safetensors` under `depthanything3/` in `silveroxides/ComfyUI-UtilsCollection-Models`.

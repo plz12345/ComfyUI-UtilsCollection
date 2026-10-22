@@ -31,6 +31,7 @@ from ..models.openpose import BodyPoseModel, HandPoseModel, FacePoseModel
 from ..models.yolox import YOLOXDetector
 from ..models.rtmpose import RTMPoseEstimator, AP10KPoseEstimator
 from ..models.densepose import DensePoseModel
+from ..models.depth_anything import DA3Small, DA3Base, DA3Large, DA3MonoLarge
 from ..models.yolo import YOLOv8nSeg, YOLOv8mSeg, YOLOv8sDetect, YOLOv8mDetect, YOLO11xDetect
 import math
 import numbers
@@ -268,6 +269,69 @@ def yolo_forward(patcher, images_nchw):
     if isinstance(output, (tuple, list)):
         return tuple(value.detach().float() for value in output)
     return output.detach().float()
+
+
+DEPTH_ANYTHING_FOLDER = "depthanything3"
+DEPTH_ANYTHING_MIGRATIONS = {
+    "da3_small.safetensors": ("da3_small", DA3Small),
+    "da3_base.safetensors": ("da3_base", DA3Base),
+    "da3_large.safetensors": ("da3_large", DA3Large),
+    "da3mono_large.safetensors": ("da3mono_large", DA3MonoLarge),
+}
+DEPTH_ANYTHING_MODELS = tuple(DEPTH_ANYTHING_MIGRATIONS)
+_DEPTH_ANYTHING_ALIASES = {
+    **{name: name for name in DEPTH_ANYTHING_MIGRATIONS},
+    **{name.removesuffix(".safetensors"): name for name in DEPTH_ANYTHING_MIGRATIONS},
+    **{name.replace("_", "-"): name for name in DEPTH_ANYTHING_MIGRATIONS},
+    **{name.removesuffix(".safetensors").replace("_", "-"): name for name in DEPTH_ANYTHING_MIGRATIONS},
+    **{kind: name for name, (kind, _) in DEPTH_ANYTHING_MIGRATIONS.items()},
+}
+
+
+def register_depth_anything_paths():
+    folder_paths.add_model_folder_path(DEPTH_ANYTHING_FOLDER, os.path.join(folder_paths.models_dir, "depthanything3"))
+    paths, extensions = folder_paths.folder_names_and_paths[DEPTH_ANYTHING_FOLDER]
+    folder_paths.folder_names_and_paths[DEPTH_ANYTHING_FOLDER] = (paths, extensions | {".safetensors"})
+
+
+def get_depth_anything_model_names():
+    return list(DEPTH_ANYTHING_MODELS)
+
+
+def resolve_depth_anything_model_name(model_name):
+    normalized = str(model_name or "").strip().replace("\\", "/").split("/")[-1].lower()
+    if normalized in _DEPTH_ANYTHING_ALIASES:
+        return _DEPTH_ANYTHING_ALIASES[normalized]
+    raise ValueError(
+        f"Unknown Depth Anything 3 model: {model_name!r}. "
+        f"Available models: {', '.join(DEPTH_ANYTHING_MODELS)}"
+    )
+
+
+def load_depth_anything_model(model_name):
+    canonical_name = resolve_depth_anything_model_name(model_name)
+    kind, architecture = DEPTH_ANYTHING_MIGRATIONS[canonical_name]
+    register_depth_anything_paths()
+    patcher = load_migrated_pose_model(kind, architecture)
+    patcher.model.model_name = canonical_name
+    return patcher
+
+
+def depth_anything_forward(patcher, images_5d, ref_view_strategy="saddle_balanced", compute_ray=False):
+    comfy.model_management.throw_exception_if_processing_interrupted()
+    comfy.model_management.load_models_gpu([patcher])
+    patcher.model.eval()
+    dtype = next(patcher.model.parameters()).dtype
+    with torch.no_grad():
+        output = patcher.model(
+            images_5d.to(device=patcher.load_device, dtype=dtype),
+            ref_view_strategy=ref_view_strategy,
+            compute_ray=compute_ray,
+        )
+    return {
+        key: value.detach().float().cpu() if torch.is_tensor(value) else value
+        for key, value in output.items()
+    }
 
 
 def _extract_text_prompts(conditioning, device, dtype):

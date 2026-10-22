@@ -103,6 +103,42 @@
       "folder_category": "yolo_bbox", "folder_relative": "yolo/bbox",
       "mapping": "module_maps", "task": "bbox", "imgsz": 1024, "labels": ["watermark"],
       "input": "NCHW RGB 0..1 letterboxed to stride32 (1024)", "output": "predictions B5xA"
+    },
+    "da3_small": {
+      "module": "depth_anything", "architecture": "DA3Small", "source_format": "safetensors",
+      "source_repo": "depth-anything/DA3-SMALL", "source_file": "model.safetensors",
+      "filename": "da3_small.safetensors", "hf_path": "depthanything3/da3_small.safetensors",
+      "folder_category": "depthanything3", "folder_relative": "depthanything3",
+      "mapping": "module_maps",
+      "input": "B,S,3,H,W ImageNet-normalized RGB; H,W multiples of 14",
+      "output": "{depth, depth_conf, extrinsics, intrinsics}"
+    },
+    "da3_base": {
+      "module": "depth_anything", "architecture": "DA3Base", "source_format": "safetensors",
+      "source_repo": "depth-anything/DA3-BASE", "source_file": "model.safetensors",
+      "filename": "da3_base.safetensors", "hf_path": "depthanything3/da3_base.safetensors",
+      "folder_category": "depthanything3", "folder_relative": "depthanything3",
+      "mapping": "module_maps",
+      "input": "B,S,3,H,W ImageNet-normalized RGB; H,W multiples of 14",
+      "output": "{depth, depth_conf, extrinsics, intrinsics}"
+    },
+    "da3_large": {
+      "module": "depth_anything", "architecture": "DA3Large", "source_format": "safetensors",
+      "source_repo": "depth-anything/DA3-LARGE-1.1", "source_file": "model.safetensors",
+      "filename": "da3_large.safetensors", "hf_path": "depthanything3/da3_large.safetensors",
+      "folder_category": "depthanything3", "folder_relative": "depthanything3",
+      "mapping": "module_maps",
+      "input": "B,S,3,H,W ImageNet-normalized RGB; H,W multiples of 14",
+      "output": "{depth, depth_conf, extrinsics, intrinsics}"
+    },
+    "da3mono_large": {
+      "module": "depth_anything", "architecture": "DA3MonoLarge", "source_format": "safetensors",
+      "source_repo": "depth-anything/DA3MONO-LARGE", "source_file": "model.safetensors",
+      "filename": "da3mono_large.safetensors", "hf_path": "depthanything3/da3mono_large.safetensors",
+      "folder_category": "depthanything3", "folder_relative": "depthanything3",
+      "mapping": "module_maps",
+      "input": "B,S,3,H,W ImageNet-normalized RGB; H,W multiples of 14",
+      "output": "{depth, sky}"
     }
   }
 }

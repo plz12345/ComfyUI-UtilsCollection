@@ -15,7 +15,7 @@
         "properties": {
           "module": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
           "architecture": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*$"},
-          "source_format": {"enum": ["state_dict", "torchscript", "yolo_checkpoint"]},
+          "source_format": {"enum": ["state_dict", "torchscript", "yolo_checkpoint", "safetensors"]},
           "source_repo": {"type": "string"}, "source_file": {"type": "string"},
           "filename": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+\\.safetensors$"},
           "hf_path": {"type": "string"},

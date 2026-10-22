@@ -178,6 +178,8 @@ the base-resolution conditioning fusion.
 - `UC_SAM3Detect`
 - `UC_YOLODetectorLoader`
 - `UC_YOLODetect`
+- `UC_DepthAnythingV3Loader`
+- `UC_DepthAnythingV3`
 - `UC_MaskToBoundingBox`
 - `UC_ImageBlendByMask`
 - `UC_ImagePad`
@@ -251,6 +253,8 @@ Both nodes share optional `temporal_filter`: it treats the input batch as ordere
 Additional files: `animalpose_ap10k_256.safetensors` under HF `preprocessors/animalpose/`, and `densepose_r50_fpn.safetensors` under `preprocessors/densepose/`; both install in the same local preprocessor model directory. Artifact conversion/loading is verified separately from numerical prediction parity and measured speed, which remain unverified for these ports.
 
 `UC_YOLODetectorLoader` and `UC_YOLODetect` run converted YOLOv8 and YOLO11 detection and segmentation `.safetensors` models through UEL and ComfyUI model management without requiring external detector packages or unsafe `.pt` pickle loading. `UC_YOLODetectorLoader` outputs `BBOX_DETECTOR` and `SEGM_DETECTOR` objects, while `UC_YOLODetect` processes single images or video frame batches in `batch_size` chunks (including partial tail chunks without padding) with vectorized tensor letterboxing, on-device NMS/mask decoding, and optional cross-chunk `temporal_filter` (`temporal_radius`, `temporal_min_support`, `temporal_match_iou`), outputting `masks` (`MASK`, combined per frame or per detection) and `bboxes` (`BOUNDING_BOX`). Missing checkpoints download on execution from `silveroxides/ComfyUI-UtilsCollection-Models` (`yolo/segm/` for `face_yolov8m-seg_60.safetensors`, `person_yolov8m-seg.safetensors`, `skin_yolov8m-seg_400.safetensors`, and `hair_yolov8n-seg_60.safetensors` into `models/yolo/segm`; `yolo/bbox/` for `face_yolov8m.safetensors`, `hand_yolov8s.safetensors`, and `yolo11x-train28-best.safetensors` into `models/yolo/bbox`).
+
+`UC_DepthAnythingV3Loader` and `UC_DepthAnythingV3` run converted Depth Anything V3 `.safetensors` models (`da3_small.safetensors`, `da3_base.safetensors`, `da3_large.safetensors`, and `da3mono_large.safetensors`) through UEL and ComfyUI model management without external packages (`xformers`, `omegaconf`, `addict`, `evo`, `e3nn`, or `gsplat`). `UC_DepthAnythingV3` processes single images, multi-view sets, or video frame batches in `batch_size` chunks (in `independent` or cross-view `multi_view` mode), returning `depth_image` (`IMAGE`), `depth_mask` (`MASK`), `confidence` (`MASK`), `sky_mask` (`MASK`), and `camera_poses` (`STRING` JSON). Missing checkpoints download on execution from `silveroxides/ComfyUI-UtilsCollection-Models` (`depthanything3/`) into `models/depthanything3`.
 
 For further models, use `MODEL_MIGRATION.md` and the shared `models/migrations.json` manifest/schema rather than inventing a new conversion/loading flow.
 

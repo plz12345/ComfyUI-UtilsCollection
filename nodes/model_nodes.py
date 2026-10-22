@@ -1,7 +1,18 @@
 from comfy_api.latest import io
 from nodes import MAX_RESOLUTION
-from ..helpers.image_helpers import VIDEO_FRAME_TIMESTAMP_FORMATS, build_yolo_detectors, run_yolo_detect
+from ..helpers.image_helpers import (
+    DEPTH_ANYTHING_MULTI_VIEW_MODES,
+    DEPTH_ANYTHING_NORM_SCOPES,
+    DEPTH_ANYTHING_OUTPUT_MODES,
+    DEPTH_ANYTHING_REF_VIEW_STRATEGIES,
+    DEPTH_ANYTHING_RESIZE_METHODS,
+    VIDEO_FRAME_TIMESTAMP_FORMATS,
+    build_yolo_detectors,
+    run_depth_anything,
+    run_yolo_detect,
+)
 from ..helpers.model_helpers import (
+    DEPTH_ANYTHING_MODELS, depth_anything_forward, load_depth_anything_model, register_depth_anything_paths,
     WHISPER_MODELS, WHISPER_LANGUAGES, load_whisper_model, register_whisper_paths, run_whisper,
     YOLO_MODELS, load_yolo_model, register_yolo_paths, yolo_forward,
     format_reference_transcript_phrases,
@@ -23,8 +34,10 @@ import json
 WhisperModel = io.Custom("WHISPER_MODEL")
 BBoxDetectorType = io.Custom("BBOX_DETECTOR")
 SegmDetectorType = io.Custom("SEGM_DETECTOR")
+DepthAnythingModel = io.Custom("DEPTH_ANYTHING_MODEL")
 register_whisper_paths()
 register_yolo_paths()
+register_depth_anything_paths()
 
 
 class UC_WhisperLoader(io.ComfyNode):
@@ -356,3 +369,182 @@ class UC_YOLODetect(io.ComfyNode):
             individual_masks=individual_masks, labels=labels, temporal_filter=temporal_filter, temporal_radius=temporal_radius,
             temporal_min_support=temporal_min_support, temporal_match_iou=temporal_match_iou,
         ))
+
+
+class UC_DepthAnythingV3Loader(io.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="UC_DepthAnythingV3Loader",
+            display_name="Depth Anything V3 Loader",
+            category="image/depth",
+            description="Loads a converted Depth Anything V3 safetensors model from models/depthanything3 through UEL and ComfyUI model management. Missing models download on execution.",
+            search_aliases=["depth anything", "depth anything v3", "da3", "depth loader", "monocular depth", "multiview depth"],
+            inputs=[
+                io.Combo.Input(
+                    "model_name",
+                    options=list(DEPTH_ANYTHING_MODELS),
+                    default="da3_large.safetensors",
+                    tooltip="Choose which Depth Anything V3 checkpoint to load from models/depthanything3. da3_small, da3_base, and da3_large support single-image and multi-view depth, confidence, and camera pose estimation; da3mono_large is specialized for single-image depth and sky detection. Missing files download on execution.",
+                ),
+            ],
+            outputs=[
+                DepthAnythingModel.Output(
+                    "da3_model",
+                    tooltip="Loaded Depth Anything V3 model for the Depth Anything V3 estimation node.",
+                ),
+            ],
+        )
+
+    @classmethod
+    def execute(cls, model_name="da3_large.safetensors"):
+        return io.NodeOutput(load_depth_anything_model(model_name))
+
+
+class UC_DepthAnythingV3(io.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="UC_DepthAnythingV3",
+            display_name="Depth Anything V3",
+            category="image/depth",
+            description="Estimates depth maps, confidence masks, sky masks, and camera poses across single images, multi-view sets, or video frame batches using Depth Anything V3.",
+            search_aliases=["depth anything", "depth anything v3", "da3", "depth map", "controlnet depth", "disparity", "camera pose", "sky mask"],
+            inputs=[
+                DepthAnythingModel.Input(
+                    "da3_model",
+                    tooltip="Connect da3_model from Depth Anything V3 Loader.",
+                ),
+                io.Image.Input(
+                    "image",
+                    tooltip="Single image, multi-view image batch, or ordered video-frame batch to estimate depth from.",
+                ),
+                io.Int.Input(
+                    "process_res",
+                    default=504,
+                    min=14,
+                    max=4096,
+                    step=14,
+                    tooltip="Target processing size in pixels before rounding or cropping to a multiple of 14. 504 is the model default; raise for finer depth edges at higher memory cost, or lower for faster processing.",
+                ),
+                io.Combo.Input(
+                    "resize_method",
+                    options=list(DEPTH_ANYTHING_RESIZE_METHODS),
+                    default="upper_bound_resize",
+                    tooltip="How input dimensions are scaled to process_res and aligned to 14-pixel patches. upper_bound sets the longer edge to process_res; lower_bound sets the shorter edge. resize rounds each edge to the nearest multiple of 14; crop center-crops to a multiple of 14.",
+                ),
+                io.Combo.Input(
+                    "multi_view_mode",
+                    options=list(DEPTH_ANYTHING_MULTI_VIEW_MODES),
+                    default="independent",
+                    tooltip="For image batches on any-view models (da3_small, da3_base, da3_large): independent estimates each frame on its own; multi_view links frames within each batch_size chunk for shared 3D scale and relative camera poses. da3mono_large always processes frames independently.",
+                ),
+                io.Combo.Input(
+                    "ref_view_strategy",
+                    options=list(DEPTH_ANYTHING_REF_VIEW_STRATEGIES),
+                    default="saddle_balanced",
+                    tooltip="Multi-view mode only (3 or more frames per chunk on any-view models): how the anchor frame is chosen. saddle_balanced picks the most balanced view; saddle_sim_range picks the widest similarity span; first or middle locks the anchor to the first or middle frame in each chunk.",
+                ),
+                io.Combo.Input(
+                    "output_mode",
+                    options=list(DEPTH_ANYTHING_OUTPUT_MODES),
+                    default="disparity",
+                    tooltip="disparity converts distance to inverse depth and scales to 0–1 with closer surfaces brighter (white) and distant background darker (black), matching standard ControlNet Depth maps. depth scales linear distance to 0–1 with closer surfaces brighter when invert_depth is off. raw_depth keeps unscaled model distance values.",
+                ),
+                io.Combo.Input(
+                    "normalization_scope",
+                    options=list(DEPTH_ANYTHING_NORM_SCOPES),
+                    default="per_frame",
+                    tooltip="When scaling disparity or depth to 0–1: per_frame scales each frame independently for maximum single-image contrast; per_batch scales across the whole batch together to keep consistent brightness across video frames or multi-view sets.",
+                ),
+                io.Float.Input(
+                    "percentile_clip",
+                    default=0.0,
+                    min=0.0,
+                    max=10.0,
+                    step=0.1,
+                    tooltip="Percentage of extreme near and far pixels to clip at each end before 0–1 scaling. 0 uses exact minimum and maximum; 2 clips the lowest 2% and highest 2% to ignore outliers.",
+                ),
+                io.Boolean.Input(
+                    "invert_depth",
+                    default=False,
+                    tooltip="Flips 0–1 depth output so closer surfaces are black (0) and farther surfaces are white (1). Ignored in raw_depth mode.",
+                ),
+                io.Boolean.Input(
+                    "sky_fill",
+                    default=True,
+                    tooltip="On da3mono_large, clamps detected sky regions to the 99th-percentile non-sky distance so open sky does not crush foreground depth contrast.",
+                ),
+                io.Boolean.Input(
+                    "keep_model_size",
+                    default=False,
+                    tooltip="When off, resizes the output depth map, confidence mask, and sky mask back to the input image dimensions. When on, keeps the 14-pixel-aligned processing dimensions.",
+                ),
+                io.Int.Input(
+                    "batch_size",
+                    default=4,
+                    min=1,
+                    max=64,
+                    step=1,
+                    tooltip="Maximum images or video frames processed together per network call, including partial tail chunks without padding. Lower if VRAM runs out; raise in multi_view mode to share scale across more frames at once.",
+                ),
+            ],
+            outputs=[
+                io.Image.Output(
+                    "depth_image",
+                    tooltip="Grayscale depth map image ready for ControlNet Depth, MOSS-Image depth control, or preview.",
+                ),
+                io.Mask.Output(
+                    "depth_mask",
+                    tooltip="Single-channel depth mask with the same values as depth_image.",
+                ),
+                io.Mask.Output(
+                    "confidence",
+                    tooltip="Normalized 0–1 per-pixel depth confidence mask from any-view models (da3_small, da3_base, da3_large); all-ones mask on da3mono_large.",
+                ),
+                io.Mask.Output(
+                    "sky_mask",
+                    tooltip="Binary sky mask where 1 marks sky pixels on da3mono_large; all-zeros mask on any-view models.",
+                ),
+                io.String.Output(
+                    "camera_poses",
+                    tooltip="JSON array of per-frame predicted camera extrinsics, intrinsics, and horizontal/vertical field of view in degrees for any-view models; empty JSON array on da3mono_large.",
+                ),
+            ],
+        )
+
+    @classmethod
+    def execute(
+        cls,
+        da3_model,
+        image,
+        process_res=504,
+        resize_method="upper_bound_resize",
+        multi_view_mode="independent",
+        ref_view_strategy="saddle_balanced",
+        output_mode="disparity",
+        normalization_scope="per_frame",
+        percentile_clip=0.0,
+        invert_depth=False,
+        sky_fill=True,
+        keep_model_size=False,
+        batch_size=4,
+    ):
+        return io.NodeOutput(
+            *run_depth_anything(
+                da3_model,
+                image,
+                process_res=process_res,
+                resize_method=resize_method,
+                multi_view_mode=multi_view_mode,
+                ref_view_strategy=ref_view_strategy,
+                output_mode=output_mode,
+                normalization_scope=normalization_scope,
+                percentile_clip=percentile_clip,
+                invert_depth=invert_depth,
+                sky_fill=sky_fill,
+                keep_model_size=keep_model_size,
+                batch_size=batch_size,
+                forward=depth_anything_forward,
+            )
+        )

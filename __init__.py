@@ -209,6 +209,8 @@ class SamplingUtils(ComfyExtension):
             UC_SAM3Detect,
             UC_YOLODetectorLoader,
             UC_YOLODetect,
+            UC_DepthAnythingV3Loader,
+            UC_DepthAnythingV3,
             UC_LoadImageWithAlpha,
             UC_LoadLaMaModel,
             UC_WhisperLoader,

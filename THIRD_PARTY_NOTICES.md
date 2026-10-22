@@ -18,6 +18,11 @@ Jalen-Brunson/ComfyUI-MiniMax-H3-PDD-Acc commit 195a98d, with acceleration
 weights originating from alibaba-pai/MiniMax-H3-Acc-LoRAs, licensed under the
 Apache License 2.0.
 
+The eager Depth Anything 3 DINOv2, DPT/DualDPT, and camera pose architecture in
+`models/depth_anything.py` is adapted from ByteDance-Seed/Depth-Anything-3
+(copyright 2025 ByteDance Ltd. and/or its affiliates) and Meta Platforms DINOv2,
+licensed under the Apache License 2.0.
+
 ## MIT License
 
 Permission is hereby granted, free of charge, to any person obtaining a copy

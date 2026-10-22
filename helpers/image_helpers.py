@@ -28,6 +28,7 @@ import av
 import cv2
 import numpy as np
 import torch
+import torch.nn.functional as F
 import torchaudio
 from torchvision.ops import nms as torchvision_nms
 from nodes import MAX_RESOLUTION
@@ -3553,3 +3554,259 @@ def split_image_batch_into_batches(images: torch.Tensor, batch_size: int) -> lis
     size = max(1, int(batch_size))
     total = images.shape[0]
     return [images[i : i + size] for i in range(0, total, size)]
+
+
+DEPTH_ANYTHING_PATCH_SIZE = 14
+DEPTH_ANYTHING_RESIZE_METHODS = (
+    "upper_bound_resize",
+    "upper_bound_crop",
+    "lower_bound_resize",
+    "lower_bound_crop",
+)
+DEPTH_ANYTHING_MULTI_VIEW_MODES = ("independent", "multi_view")
+DEPTH_ANYTHING_REF_VIEW_STRATEGIES = ("saddle_balanced", "saddle_sim_range", "first", "middle")
+DEPTH_ANYTHING_OUTPUT_MODES = ("disparity", "depth", "raw_depth")
+DEPTH_ANYTHING_NORM_SCOPES = ("per_frame", "per_batch")
+_IMAGENET_MEAN = (0.485, 0.456, 0.406)
+_IMAGENET_STD = (0.229, 0.224, 0.225)
+
+
+def _nearest_patch_multiple(value: int, patch_size: int = DEPTH_ANYTHING_PATCH_SIZE) -> int:
+    down = max(patch_size, (value // patch_size) * patch_size)
+    up = down + patch_size
+    return up if abs(up - value) <= abs(value - down) else down
+
+
+def preprocess_depth_anything_batch(
+    images_bhwc: torch.Tensor,
+    process_res: int = 504,
+    resize_method: str = "upper_bound_resize",
+) -> torch.Tensor:
+    if not torch.is_tensor(images_bhwc) or images_bhwc.ndim != 4 or images_bhwc.shape[0] < 1:
+        raise ValueError("Depth Anything 3 input must be a non-empty BHWC image tensor.")
+    if resize_method not in DEPTH_ANYTHING_RESIZE_METHODS:
+        raise ValueError(
+            f"Unsupported Depth Anything 3 resize_method: {resize_method!r}. "
+            f"Expected one of: {', '.join(DEPTH_ANYTHING_RESIZE_METHODS)}."
+        )
+    target_res = max(DEPTH_ANYTHING_PATCH_SIZE, int(process_res))
+    orig_h, orig_w = int(images_bhwc.shape[1]), int(images_bhwc.shape[2])
+    nchw = images_bhwc[..., :3].movedim(-1, 1).float().clamp(0.0, 1.0)
+
+    bound = max(orig_h, orig_w) if resize_method.startswith("upper_bound") else min(orig_h, orig_w)
+    scale = target_res / float(max(1, bound))
+    scaled_h = max(DEPTH_ANYTHING_PATCH_SIZE, int(round(orig_h * scale)))
+    scaled_w = max(DEPTH_ANYTHING_PATCH_SIZE, int(round(orig_w * scale)))
+    if (scaled_h, scaled_w) != (orig_h, orig_w):
+        mode = "bicubic" if scale > 1.0 else "area"
+        kwargs = {"align_corners": False} if mode == "bicubic" else {}
+        nchw = F.interpolate(nchw, size=(scaled_h, scaled_w), mode=mode, **kwargs)
+
+    if resize_method.endswith("resize"):
+        final_h = _nearest_patch_multiple(scaled_h, DEPTH_ANYTHING_PATCH_SIZE)
+        final_w = _nearest_patch_multiple(scaled_w, DEPTH_ANYTHING_PATCH_SIZE)
+        if (final_h, final_w) != (scaled_h, scaled_w):
+            upscale = (final_h > scaled_h) or (final_w > scaled_w)
+            mode = "bicubic" if upscale else "area"
+            kwargs = {"align_corners": False} if mode == "bicubic" else {}
+            nchw = F.interpolate(nchw, size=(final_h, final_w), mode=mode, **kwargs)
+    else:
+        final_h = max(DEPTH_ANYTHING_PATCH_SIZE, (scaled_h // DEPTH_ANYTHING_PATCH_SIZE) * DEPTH_ANYTHING_PATCH_SIZE)
+        final_w = max(DEPTH_ANYTHING_PATCH_SIZE, (scaled_w // DEPTH_ANYTHING_PATCH_SIZE) * DEPTH_ANYTHING_PATCH_SIZE)
+        if (final_h, final_w) != (scaled_h, scaled_w):
+            top = (scaled_h - final_h) // 2
+            left = (scaled_w - final_w) // 2
+            nchw = nchw[:, :, top : top + final_h, left : left + final_w]
+
+    mean = torch.tensor(_IMAGENET_MEAN, dtype=nchw.dtype, device=nchw.device).view(1, 3, 1, 1)
+    std = torch.tensor(_IMAGENET_STD, dtype=nchw.dtype, device=nchw.device).view(1, 3, 1, 1)
+    return (nchw - mean) / std
+
+
+def _normalize_depth_anything_tensor(
+    values: torch.Tensor,
+    scope: str = "per_frame",
+    percentile_clip: float = 0.0,
+    invert: bool = False,
+) -> torch.Tensor:
+    clip_q = max(0.0, min(49.0, float(percentile_clip))) / 100.0
+    out = values.clone().float()
+
+    def _norm_slice(tensor_slice: torch.Tensor) -> torch.Tensor:
+        flat = tensor_slice.reshape(-1)
+        if clip_q > 0.0 and flat.numel() > 1:
+            if flat.numel() > 1_000_000:
+                step = max(1, flat.numel() // 1_000_000)
+                sampled = flat[::step]
+            else:
+                sampled = flat
+            low = torch.quantile(sampled, clip_q)
+            high = torch.quantile(sampled, 1.0 - clip_q)
+        else:
+            low = flat.min()
+            high = flat.max()
+        span = high - low
+        if float(span) <= 1e-8:
+            normed = torch.zeros_like(tensor_slice)
+        else:
+            normed = ((tensor_slice - low) / span).clamp(0.0, 1.0)
+        return 1.0 - normed if invert else normed
+
+    if scope == "per_batch":
+        return _norm_slice(out)
+    for idx in range(out.shape[0]):
+        out[idx] = _norm_slice(out[idx])
+    return out
+
+
+def run_depth_anything(
+    da3_model,
+    image: torch.Tensor,
+    process_res: int = 504,
+    resize_method: str = "upper_bound_resize",
+    multi_view_mode: str = "independent",
+    ref_view_strategy: str = "saddle_balanced",
+    output_mode: str = "disparity",
+    normalization_scope: str = "per_frame",
+    percentile_clip: float = 0.0,
+    invert_depth: bool = False,
+    sky_fill: bool = True,
+    keep_model_size: bool = False,
+    batch_size: int = 4,
+    forward=None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, str]:
+    if da3_model is None:
+        raise ValueError("Connect a Depth Anything V3 model from Depth Anything V3 Loader.")
+    if multi_view_mode not in DEPTH_ANYTHING_MULTI_VIEW_MODES:
+        raise ValueError(f"Unsupported multi_view_mode: {multi_view_mode!r}.")
+    if ref_view_strategy not in DEPTH_ANYTHING_REF_VIEW_STRATEGIES:
+        raise ValueError(f"Unsupported ref_view_strategy: {ref_view_strategy!r}.")
+    if output_mode not in DEPTH_ANYTHING_OUTPUT_MODES:
+        raise ValueError(f"Unsupported output_mode: {output_mode!r}.")
+    if normalization_scope not in DEPTH_ANYTHING_NORM_SCOPES:
+        raise ValueError(f"Unsupported normalization_scope: {normalization_scope!r}.")
+
+    if forward is None:
+        from .model_helpers import depth_anything_forward
+        forward = depth_anything_forward
+
+    orig_h, orig_w = int(image.shape[1]), int(image.shape[2])
+    total_frames = int(image.shape[0])
+    normalized_nchw = preprocess_depth_anything_batch(
+        image, process_res=process_res, resize_method=resize_method
+    )
+    proc_h, proc_w = int(normalized_nchw.shape[2]), int(normalized_nchw.shape[3])
+
+    chunk_sz = max(1, int(batch_size))
+    supports_multiview = getattr(getattr(da3_model, "model", None), "ALT_START", 8) != -1
+    use_multiview = (multi_view_mode == "multi_view") and supports_multiview
+
+    depth_chunks: list[torch.Tensor] = []
+    conf_chunks: list[torch.Tensor] = []
+    sky_chunks: list[torch.Tensor] = []
+    pose_records: list[dict] = []
+    progress = comfy.utils.ProgressBar(total_frames)
+
+    for start in range(0, total_frames, chunk_sz):
+        comfy.model_management.throw_exception_if_processing_interrupted()
+        end = min(start + chunk_sz, total_frames)
+        chunk = normalized_nchw[start:end]
+        count = chunk.shape[0]
+        images_5d = chunk.unsqueeze(0) if use_multiview else chunk.unsqueeze(1)
+        raw_out = forward(da3_model, images_5d, ref_view_strategy=ref_view_strategy)
+
+        depth = raw_out["depth"].reshape(count, proc_h, proc_w).float().cpu()
+        if "depth_conf" in raw_out and raw_out["depth_conf"] is not None:
+            conf = raw_out["depth_conf"].reshape(count, proc_h, proc_w).float().cpu()
+        else:
+            conf = torch.ones((count, proc_h, proc_w), dtype=torch.float32)
+
+        if "sky" in raw_out and raw_out["sky"] is not None:
+            sky = raw_out["sky"].reshape(count, proc_h, proc_w).float().cpu()
+            sky_binary = (sky >= 0.3).float()
+            if sky_fill:
+                for idx in range(count):
+                    non_sky = sky[idx] < 0.3
+                    if int(non_sky.sum()) > 10 and int((~non_sky).sum()) > 10:
+                        valid = depth[idx][non_sky]
+                        if valid.numel() > 100_000:
+                            step = max(1, valid.numel() // 100_000)
+                            valid = valid[::step]
+                        max_d = torch.quantile(valid, 0.99)
+                        depth[idx] = torch.where(non_sky, depth[idx], max_d)
+        else:
+            sky_binary = torch.zeros((count, proc_h, proc_w), dtype=torch.float32)
+
+        if "extrinsics" in raw_out and "intrinsics" in raw_out:
+            ext = raw_out["extrinsics"].reshape(count, 3, 4).float().cpu()
+            ixt = raw_out["intrinsics"].reshape(count, 3, 3).float().cpu()
+            out_h = proc_h if keep_model_size else orig_h
+            out_w = proc_w if keep_model_size else orig_w
+            scale_x = out_w / float(proc_w)
+            scale_y = out_h / float(proc_h)
+            for idx in range(count):
+                k_mat = ixt[idx].clone()
+                k_mat[0, :] *= scale_x
+                k_mat[1, :] *= scale_y
+                fx = float(k_mat[0, 0])
+                fy = float(k_mat[1, 1])
+                fov_x = math.degrees(2.0 * math.atan((out_w / 2.0) / max(fx, 1e-6)))
+                fov_y = math.degrees(2.0 * math.atan((out_h / 2.0) / max(fy, 1e-6)))
+                pose_records.append(
+                    {
+                        "frame_index": start + idx,
+                        "extrinsics_w2c": [[round(float(v), 6) for v in row] for row in ext[idx]],
+                        "intrinsics": [[round(float(v), 6) for v in row] for row in k_mat],
+                        "fov_x_deg": round(fov_x, 4),
+                        "fov_y_deg": round(fov_y, 4),
+                    }
+                )
+
+        depth_chunks.append(depth)
+        conf_chunks.append(conf)
+        sky_chunks.append(sky_binary)
+        progress.update(count)
+
+    all_depth = torch.cat(depth_chunks, dim=0)
+    all_conf = torch.cat(conf_chunks, dim=0)
+    all_sky = torch.cat(sky_chunks, dim=0)
+
+    if not keep_model_size and (proc_h, proc_w) != (orig_h, orig_w):
+        all_depth = F.interpolate(
+            all_depth.unsqueeze(1), size=(orig_h, orig_w), mode="bilinear", align_corners=True
+        ).squeeze(1)
+        all_conf = F.interpolate(
+            all_conf.unsqueeze(1), size=(orig_h, orig_w), mode="bilinear", align_corners=True
+        ).squeeze(1)
+        all_sky = (
+            F.interpolate(
+                all_sky.unsqueeze(1), size=(orig_h, orig_w), mode="bilinear", align_corners=False
+            ).squeeze(1)
+            >= 0.5
+        ).float()
+
+    if output_mode == "disparity":
+        inv_depth = 1.0 / all_depth.clamp_min(1e-6)
+        depth_mask = _normalize_depth_anything_tensor(
+            inv_depth,
+            scope=normalization_scope,
+            percentile_clip=percentile_clip,
+            invert=invert_depth,
+        )
+    elif output_mode == "depth":
+        depth_mask = _normalize_depth_anything_tensor(
+            all_depth,
+            scope=normalization_scope,
+            percentile_clip=percentile_clip,
+            invert=not invert_depth,
+        )
+    else:
+        depth_mask = all_depth
+
+    conf_mask = _normalize_depth_anything_tensor(all_conf, scope="per_frame", percentile_clip=0.0, invert=False)
+    if float(all_conf.max() - all_conf.min()) <= 1e-8:
+        conf_mask = torch.ones_like(all_conf)
+
+    depth_image = depth_mask.unsqueeze(-1).repeat(1, 1, 1, 3)
+    return depth_image, depth_mask, conf_mask, all_sky, json.dumps(pose_records)
+

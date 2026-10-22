@@ -22,6 +22,8 @@ DESCRIPTIONS = {
     "UC_SAM31CheckpointLoader": "Loads SAM 3.1 with automatic or deterministic FP32 precision.",
     "UC_YOLODetectorLoader": "Loads a converted YOLOv8 or YOLO11 bounding-box or segmentation safetensors detector from models/yolo for YOLO Detect or detailer workflows.",
     "UC_YOLODetect": "Detects faces, people, hands, skin, hair, or watermarks across images or video frame batches using native safetensors YOLOv8 and YOLO11 models, returning masks and bounding boxes.",
+    "UC_DepthAnythingV3Loader": "Loads a converted Depth Anything V3 safetensors model from models/depthanything3 for monocular or multi-view depth estimation.",
+    "UC_DepthAnythingV3": "Estimates depth maps, confidence masks, sky masks, and camera poses across single images, multi-view sets, or video frame batches using Depth Anything V3.",
     "UC_MaskToBoundingBox": "Returns the smallest Core-compatible bounding box containing the mask.",
     "UC_ImageBlendByMask": "Blends two images using a mask and configurable blend behavior.",
     "UC_ImagePad": "Pads an image and produces the corresponding placement mask.",
@@ -240,6 +242,8 @@ EXTRA_ALIASES = {
     "UC_MiniMaxH3ClipContinuationSampler": ["continuation sampler", "chain sampler", "segment list sampler", "h3 list sampler"],
     "UC_YOLODetectorLoader": ["yolo detector loader", "yolo loader", "yolov8", "yolo11", "bbox detector", "segm detector", "adetailer", "impact pack"],
     "UC_YOLODetect": ["yolo detect", "yolov8", "yolo11", "watermark detector", "face detector", "hand detector", "person segmentation", "hair segmentation", "skin segmentation", "segs"],
+    "UC_DepthAnythingV3Loader": ["depth anything", "depth anything v3", "da3", "depth loader", "monocular depth", "multiview depth"],
+    "UC_DepthAnythingV3": ["depth anything", "depth anything v3", "da3", "depth map", "controlnet depth", "disparity", "camera pose", "sky mask"],
 }
 
 
