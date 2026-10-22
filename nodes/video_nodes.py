@@ -171,7 +171,7 @@ class UC_SaveVideo(io.ComfyNode):
                     min=0,
                     max=16,
                     step=1,
-                    tooltip="Predictive frames between keyframes. 0 provides the best editing responsiveness.",
+                    tooltip="Maximum consecutive bi-directional frames (B-frames) that compress video by referencing both earlier and later frames. 0 disables B-frames so every frame decodes in strict time order for fast frame-by-frame scrubbing and cutting; raising to 2-4 shrinks file size (or improves quality at a fixed bitrate) at the cost of heavier decoding when scrubbing backward.",
                 ),
                 io.Float.Input(
                     "bitrate_mbps",
