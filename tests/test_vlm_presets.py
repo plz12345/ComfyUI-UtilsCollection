@@ -2053,23 +2053,58 @@ def test_minimax_h3_attr_transfer_multi_subject_contracts():
         "video_timeline_minimax_h3_ref2va_attr_transfer_no_audio",
     )
     for key in keys:
-        instruction = vlm_presets.system_instructions_vlm[key]
-        assert "Original subjects from `<Video 1>` designated for replacement must NEVER be defined under `subject_definitions:`" in instruction
-        assert "`<Subject {N}>` is a {visual description of the subject that will be used in the video}, referenced from `<Picture {N}>`." in instruction
-        assert "where on-screen subject(s) are replaced by defined `<Subject {N}>` entities from `<Picture {N}>`" in instruction
-        assert "with source subjects replaced by defined `<Subject {N}>` entities" in instruction
-        assert (
-            "Strict Visual Appearance Continuity: In every single shot and timestamp block, all visual details (face, body, materials, textures, geometry, colors) for each defined `<Subject N>` must strictly and exclusively depict that `<Subject N>` using the visual traits established by matching `<Picture N>`"
-            in instruction
-            or "Strict Visual Appearance Continuity: In every single shot and timestamp block, all visual details (face, body, materials, textures, geometry, colors) for each defined <Subject N> must strictly and exclusively depict that <Subject N> using the visual traits established by matching <Picture N>"
-            in instruction
-        )
-        assert (
-            "Original subjects from `<Video 1>` designated for replacement are NEVER defined, named, described, or assigned `<Subject N>` aliases under `subject_definitions:`"
-            in instruction
-            or "Original subjects from `<Video 1>` designated for replacement are NEVER defined, named, described, or assigned <Subject N> aliases under `subject_definitions:`"
-            in instruction
-        )
+        for collection in (
+            vlm_presets.system_instructions_vlm,
+            vlm_motion_presets.motion_system_instructions_vlm,
+        ):
+            instruction = collection[key]
+            assert "Original subjects from `<Video 1>` designated for replacement must NEVER be defined under `subject_definitions:`" in instruction
+            assert "Every other non-replaced subject present in `<Video 1>` must be defined as its own `<Subject {N}>` under `subject_definitions:` using its visible traits from `<Video 1>`." in instruction
+            assert "When other subjects in `<Video 1>` have dialogue, attribute their `[SPEECH]` lines to their own `<Subject {N}> (S{N})` tag and never set their dialogue to be spoken by the reference-replaced subject." in instruction
+            assert "Every other non-replaced subject present in `<Video 1>` must be defined as its own <Subject N> in `subject_definitions:` using its visible traits from `<Video 1>`." in instruction
+            assert "Attribute every [SPEECH] line strictly to the <Subject N> (Sx) who speaks it; if other subjects in `<Video 1>` have dialogue, assign their dialogue to their own <Subject N> (Sx) tag and never set it to be spoken by the reference-replaced subject." in instruction
+            assert "`<Subject {N}>` is a {visual description of the subject that will be used in the video}, referenced from `<Picture {N}>`." in instruction
+            assert "where on-screen subject(s) are replaced by defined `<Subject {N}>` entities from `<Picture {N}>`" in instruction
+            assert "with source subjects replaced by defined `<Subject {N}>` entities" in instruction
+            assert (
+                "Strict Visual Appearance Continuity: In every single shot and timestamp block, all visual details (face, body, materials, textures, geometry, colors) for each defined `<Subject N>` must strictly and exclusively depict that `<Subject N>` using the visual traits established by matching `<Picture N>`"
+                in instruction
+                or "Strict Visual Appearance Continuity: In every single shot and timestamp block, all visual details (face, body, materials, textures, geometry, colors) for each defined <Subject N> must strictly and exclusively depict that <Subject N> using the visual traits established by matching <Picture N>"
+                in instruction
+            )
+            assert (
+                "Original subjects from `<Video 1>` designated for replacement are NEVER defined, named, described, or assigned `<Subject N>` aliases under `subject_definitions:`"
+                in instruction
+                or "Original subjects from `<Video 1>` designated for replacement are NEVER defined, named, described, or assigned <Subject N> aliases under `subject_definitions:`"
+                in instruction
+            )
+
+    for collection in (
+        vlm_presets.system_instructions_vlm,
+        vlm_motion_presets.motion_system_instructions_vlm,
+    ):
+        attr_transfer = collection["video_timeline_minimax_h3_ref2va_attribute_transfer"]
+        assert "Every other non-replaced subject present in `<Video 1>` must be defined as its own `<Subject {N}>` under `subject_definitions:` using its visible traits from `<Video 1>`." in attr_transfer
+        assert "Attribute every [SPEECH] line strictly to the <Subject N> (Sx) who speaks it; if other subjects in <Video 1> have dialogue, assign their dialogue to their own <Subject N> (Sx) tag and never set it to be spoken by the reference-replaced subject." in attr_transfer
+
+        ref2va_general = collection["video_timeline_minimax_h3_ref2va_general"]
+        assert "define every other non-replaced subject present in <Video N> as its own <Subject N> using its visible traits from <Video N>." in ref2va_general
+        assert "Attribute every [SPEECH] line strictly to the <Subject N> (Sx) who speaks it; if other subjects in the video have dialogue, assign their dialogue to their own <Subject N> (Sx) tag and never set it to be spoken by the reference-replaced subject." in ref2va_general
+
+    for query_key in (
+        "h3_ref2va_attr_transfer_audio_timbre",
+        "h3_ref2va_attr_transfer_audio_copy",
+        "h3_ref2va_attr_transfer_no_audio",
+    ):
+        pref = vlm_presets.system_query_additional_vlm[f"{query_key}_prefix"]
+        suff = vlm_presets.system_query_additional_vlm[f"{query_key}_suffix"]
+        raw = vlm_presets.system_query_raw_vlm[query_key]
+        assert "Any other non-replaced subjects in `<Video 1>` must be defined as separate `<Subject N>` entities" in pref
+        assert "define any other non-replaced subjects in `<Video 1>` as their own `<Subject N>` entities" in suff
+        assert "never set" in suff and "spoken by `<Subject 1>`" in suff
+        assert "define any other non-replaced subjects in `<Video 1>` as their own `<Subject N>` entities" in raw
+        assert "never set" in raw and "spoken by `<Subject 1>`" in raw
+
 
 
 def test_moss_image_json_preset_contract():

@@ -1406,8 +1406,8 @@ one to three English sentences or N/A
 
 Use the following template as guideline for constructing proper prompt and timeline and everything within curly brace `{}` contains elements to replace and `N` in `{N}` is replaced by corresponding number.  
 Number of timestamp segments in the Timeline must be adjusted for accurate syncronization to movement, actions and/or dialogue.  
-Original subjects from `<Video 1>` designated for replacement must NEVER be defined under `subject_definitions:`, nor described in summary or detailed description. `<Subject {N}>` represents target subjects in the video (including replacement subjects defined from matching `<Picture {N}>` and any non-replaced target subjects). No visual traits of replaced video subjects may appear in summary or detailed description. All defined `<Subject {N}>` entities are present throughout from 00.00s to the final frame with zero reversion.  
-Do NOT include lyrics or dialogue as [SPEECH] unless the subject in focus is speaking.  
+Original subjects from `<Video 1>` designated for replacement must NEVER be defined under `subject_definitions:`, nor described in summary or detailed description. `<Subject {N}>` represents target subjects in the video (including replacement subjects defined from matching `<Picture {N}>` and any non-replaced target subjects). Every other non-replaced subject present in `<Video 1>` must be defined as its own `<Subject {N}>` under `subject_definitions:` using its visible traits from `<Video 1>`. No visual traits of replaced video subjects may appear in summary or detailed description. All defined `<Subject {N}>` entities are present throughout from 00.00s to the final frame with zero reversion.  
+Do NOT include lyrics or dialogue as [SPEECH] unless an active `<Subject {N}>` is speaking. When other subjects in `<Video 1>` have dialogue, attribute their `[SPEECH]` lines to their own `<Subject {N}> (S{N})` tag and never set their dialogue to be spoken by the reference-replaced subject.  
 Do NOT invent sounds. [SOUNDS] is not for music or instruments.  
 The number of segments presented in template is not an absolute maximum limit or absolute minimum limit. Number of segments depends scenes and actions in video.  
 
@@ -1488,7 +1488,7 @@ Use only the applicable natural declaration forms. The backticks in this instruc
 
 | Semantic tag declaration | Purpose in `subject_definitions` |
 | --- | --- |
-| `<Subject N> is ...` | completed target subject definition with visual identity from <Picture N> and motion from `<Video 1>` |
+| `<Subject N> is ...` | completed target subject definition (replacement subject citing <Picture N> appearance and `<Video 1>` motion, or non-replaced subject citing `<Video 1>`) |
 | `<Picture N> is ...` | reference image supplying visual identity and appearance |
 | `<Video 1> is ...` | source video providing camera movement, choreography, timing, and motion |
 
@@ -1496,7 +1496,7 @@ Define every supported reference with its prompt role and the concrete visible c
 
 Use visual vocabulary appropriate to the governing style while preserving supported identity and visible traits. Retain an accurate source rendering-medium description when that style remains active. Do not carry a source medium into a conflicting requested target style.
 
-Do not invent production methods, unsupported additions, external identities, or speculative unseen Subjects. Define only static reusable content and reference roles in subject_definitions; do not narrate timeline actions, plot events, or motion progression here. Write exactly one definition per line deal where only other allowed mention is by direct other tag (such as citing source <Picture N>). Original subjects from `<Video 1>` designated for replacement are NEVER defined, named, described, or assigned <Subject N> aliases under `subject_definitions:`. Allocate <Subject N> aliases for target subjects in the video (including replacement subjects defined from <Picture N> and any non-replaced target subjects). State replacement mappings exclusively in `summary:` and `retention_analysis:`.
+Do not invent production methods, unsupported additions, external identities, or speculative unseen Subjects. Define only static reusable content and reference roles in subject_definitions; do not narrate timeline actions, plot events, or motion progression here. Write exactly one definition per line deal where only other allowed mention is by direct other tag (such as citing source <Picture N>). Original subjects from `<Video 1>` designated for replacement are NEVER defined, named, described, or assigned <Subject N> aliases under `subject_definitions:`. Allocate <Subject N> aliases for target subjects in the video (including replacement subjects defined from <Picture N> and any non-replaced target subjects). Every other non-replaced subject present in `<Video 1>` must be defined as its own <Subject N> in `subject_definitions:` using its visible traits from `<Video 1>`. State replacement mappings exclusively in `summary:` and `retention_analysis:`.
 
 Create and number <Subject N> aliases only for reusable content supported by visible evidence or explicitly introduced by `\\{user_query\\}`. Define each alias once.
 
@@ -1516,6 +1516,7 @@ Write one concise line for every separately tracked label. Preserve the role def
 
 `<Subject 1>: attribute_transfer - full visual identity, appearance, and styling transferred onto the motion definition of <Video 1>`  
 `<Video 1>: partially_preserved - retains full camera movement, choreography, timing, and scene progression with source subjects replaced by defined <Subject N> entities (for single subject: with subject replaced by <Subject 1>)`  
+For any non-replaced <Subject N> from `<Video 1>`, write `<Subject N>: fully_preserved` or `partially_preserved` according to its retained role.  
 
 Do not write <Audio N> lines.
 
@@ -1586,7 +1587,7 @@ When several already-numbered speakers vocalize together, use one compound ID in
 
 At a speaker’s first vocal event, establish supported character type, apparent age, supported or requested gender, on-screen or off-screen state, pitch, timbre, speaking rate, and accent when evidence or instruction supports those properties. Do not invent an unsupported identity or voice property.
 
-For a referenced speaking Subject, write [SPEECH]: <Subject N> (Sx) `<d>`[Language] spoken content`</d>`. Keep identity, source, action, and delivery outside `<d>`. Keep only the language tag and spoken words inside `<d>`.
+For a referenced speaking Subject, write [SPEECH]: <Subject N> (Sx) `<d>`[Language] spoken content`</d>`. Keep identity, source, action, and delivery outside `<d>`. Keep only the language tag and spoken words inside `<d>`. Attribute every [SPEECH] line strictly to the <Subject N> (Sx) who speaks it; if other subjects in `<Video 1>` have dialogue, assign their dialogue to their own <Subject N> (Sx) tag and never set it to be spoken by the reference-replaced subject.
 
 For voiceover, use the exact phrase says in an off-screen voiceover. Immediately after the `<d>` block, state that the corresponding on-screen character’s lips remain closed.
 
@@ -1628,12 +1629,12 @@ The number of Subjects described must match the number clearly featured in the i
 
 1. Analyze reference Pictures and source Video. Identify target Subject visual traits from each Picture and motion/camera from Video. Completely discard the visual identity, features, and styling of any subject in <Video 1> designated for replacement.
 2. Parse `\\{user_query\\}` and the user request for exact duration, requested development, replacement mappings, dialogue, lyrics, and sound.
-3. Define all target Subjects in subject_definitions citing respective Picture appearance and <Video N> motion. Define <Video 1>.
+3. Define all target Subjects in subject_definitions citing respective Picture appearance and <Video N> motion for replaced subjects, and defining every other non-replaced subject in <Video 1> as its own <Subject N>. Define <Video 1>.
 4. Begin summary with `[video editing + reference generation]`. State target video premise and attribute transfer without retelling the timeline.
-5. Write retention_analysis with one attribute_transfer line per active <Subject N> and <Video 1>: partially_preserved.
+5. Write retention_analysis with one attribute_transfer line per replaced <Subject N>, fully_preserved or partially_preserved for any non-replaced <Subject N>, and <Video 1>: partially_preserved.
 6. Plan adaptive contiguous timestamp ranges matching the motion timeline of <Video 1>.
 7. Write detailed_description and Timeline with strict <Subject N> tags, explicit contact mechanics, zero pronouns ('They', 'their', 'both'), and 100% consistent appearance matching each <Subject N>'s reference picture across all shots (never revert to replaced video subjects' appearances).
-8. Keep synchronized [SPEECH], [SOUNDS], and [MUSIC] in the applicable timestamp blocks.
+8. Keep synchronized [SPEECH], [SOUNDS], and [MUSIC] in the applicable timestamp blocks, attributing any dialogue spoken by other subjects to their own <Subject N> (Sx) tag and never to the reference-replaced subject.
 9. Finish with overall_soundscape and non_diegetic_music: N/A.
 10. Verify zero occurrences of pronouns ('They', 'their', 'them', 'he', 'she', 'both') and verify that zero visual traits of replaced video subjects appear anywhere in the output.
 
@@ -1761,8 +1762,8 @@ one to three English sentences or N/A
 
 Use the following template as guideline for constructing proper prompt and timeline and everything within curly brace `{}` contains elements to replace and `N` in `{N}` is replaced by corresponding number.  
 Number of timestamp segments in the Timeline must be adjusted for accurate syncronization to movement, actions and/or dialogue.  
-Original subjects from `<Video 1>` designated for replacement must NEVER be defined under `subject_definitions:`, nor described in summary or detailed description. `<Subject {N}>` represents target subjects in the video (including replacement subjects defined from matching `<Picture {N}>` and any non-replaced target subjects). No visual traits of replaced video subjects may appear in summary or detailed description. All defined `<Subject {N}>` entities are present throughout from 00.00s to the final frame with zero reversion.  
-Do NOT include lyrics or dialogue as [SPEECH] unless the subject in focus is speaking.  
+Original subjects from `<Video 1>` designated for replacement must NEVER be defined under `subject_definitions:`, nor described in summary or detailed description. `<Subject {N}>` represents target subjects in the video (including replacement subjects defined from matching `<Picture {N}>` and any non-replaced target subjects). Every other non-replaced subject present in `<Video 1>` must be defined as its own `<Subject {N}>` under `subject_definitions:` using its visible traits from `<Video 1>`. No visual traits of replaced video subjects may appear in summary or detailed description. All defined `<Subject {N}>` entities are present throughout from 00.00s to the final frame with zero reversion.  
+Do NOT include lyrics or dialogue as [SPEECH] unless an active `<Subject {N}>` is speaking. When other subjects in `<Video 1>` have dialogue, attribute their `[SPEECH]` lines to their own `<Subject {N}> (S{N})` tag and never set their dialogue to be spoken by the reference-replaced subject.  
 Do NOT invent sounds. [SOUNDS] is not for music or instruments.  
 The number of segments presented in template is not an absolute maximum limit or absolute minimum limit. Number of segments depends scenes and actions in video.  
 
@@ -1851,7 +1852,7 @@ Use only the applicable natural declaration forms. The backticks in this instruc
 
 | Semantic tag declaration | Purpose in `subject_definitions` |
 | --- | --- |
-| `<Subject N> is ...` | completed target subject definition with visual identity from <Picture N> and motion from `<Video 1>` |
+| `<Subject N> is ...` | completed target subject definition (replacement subject citing <Picture N> appearance and `<Video 1>` motion, or non-replaced subject citing `<Video 1>`) |
 | `<Picture N> is ...` | reference image supplying visual identity and appearance |
 | `<Video 1> is ...` | source video providing camera movement, choreography, timing, and motion |
 | `<Audio 1> is ...` | voice-timbre and vocal-delivery reference for `<Subject 1> (S1)` |
@@ -1860,7 +1861,7 @@ Define every supported reference with its prompt role and the concrete visible o
 
 Use visual vocabulary appropriate to the governing style while preserving supported identity and visible traits. Retain an accurate source rendering-medium description when that style remains active. Do not carry a source medium into a conflicting requested target style.
 
-Do not invent production methods, unsupported additions, external identities, or speculative unseen Subjects. Define only static reusable content and reference roles in subject_definitions; do not narrate timeline actions, plot events, or motion progression here. Write exactly one definition per line deal where only other allowed mention is by direct other tag (such as citing source <Picture N>). Original subjects from `<Video 1>` designated for replacement are NEVER defined, named, described, or assigned <Subject N> aliases under `subject_definitions:`. Allocate <Subject N> aliases for target subjects in the video (including replacement subjects defined from <Picture N> and any non-replaced target subjects). State replacement mappings exclusively in `summary:` and `retention_analysis:`.
+Do not invent production methods, unsupported additions, external identities, or speculative unseen Subjects. Define only static reusable content and reference roles in subject_definitions; do not narrate timeline actions, plot events, or motion progression here. Write exactly one definition per line deal where only other allowed mention is by direct other tag (such as citing source <Picture N>). Original subjects from `<Video 1>` designated for replacement are NEVER defined, named, described, or assigned <Subject N> aliases under `subject_definitions:`. Allocate <Subject N> aliases for target subjects in the video (including replacement subjects defined from <Picture N> and any non-replaced target subjects). Every other non-replaced subject present in `<Video 1>` must be defined as its own <Subject N> in `subject_definitions:` using its visible traits from `<Video 1>`. State replacement mappings exclusively in `summary:` and `retention_analysis:`.
 
 Create and number <Subject N> aliases only for reusable content supported by visible evidence or explicitly introduced by `\\{user_query\\}`. Define each alias once.
 
@@ -1882,6 +1883,7 @@ Write one concise line for every separately tracked label. Preserve the role def
 
 `<Subject 1>: attribute_transfer - full visual identity, appearance, and styling transferred onto the motion definition of <Video 1>`  
 `<Video 1>: partially_preserved - retains full camera movement, choreography, timing, and scene progression with source subjects replaced by defined <Subject N> entities (for single subject: with subject replaced by <Subject 1>)`  
+For any non-replaced <Subject N> from `<Video 1>`, write `<Subject N>: fully_preserved` or `partially_preserved` according to its retained role.  
 `<Audio 1>: reference - vocal timbre and delivery guide speech of <Subject 1> (S1) without copying audio signal`  
 
 Use partially_preserved only when some source <Video N> content itself remains visible.
@@ -1946,7 +1948,7 @@ Maintain concrete visual-motion language throughout every [VISUAL] line. Continu
 
 Treat Add dialogue or another direct dialogue request as a complete requirement to write dialogue rather than a request to detect existing speech. When dialogue is requested without exact lines, write concise context-fitting lines, choose supported speakers, and schedule them at natural pauses. Do not force dialogue into every block.
 
-Assign stable speaker identifiers in actual vocal-event order. A speaker keeps the same ID across every Shot. `<Subject 1>` (S1) follows the vocal timbre referenced from `<Audio 1>`.
+Assign stable speaker identifiers in actual vocal-event order. A speaker keeps the same ID across every Shot. `<Subject 1>` (S1) follows the vocal timbre referenced from `<Audio 1>` when `<Subject 1>` speaks. Attribute every [SPEECH] line strictly to the <Subject N> (Sx) who speaks it; if other subjects in `<Video 1>` have dialogue, assign their dialogue to their own <Subject N> (Sx) tag and never set it to be spoken by the reference-replaced subject.
 
 When several already-numbered speakers vocalize together, use one compound ID in the form (S1,S2).
 
@@ -2004,12 +2006,12 @@ The number of Subjects described must match the number clearly featured in the i
 
 1. Analyze reference Pictures and source Video. Identify target Subject visual traits from each Picture and motion/camera from Video. Completely discard the visual identity, features, and styling of any subject in <Video 1> designated for replacement.
 2. Parse `\\{user_query\\}` and the user request for exact duration, requested development, replacement mappings, dialogue, lyrics, sound, and music.
-3. Define all target Subjects in subject_definitions citing respective Picture appearance and <Video N> motion. Define <Video 1> and <Audio 1> (timbre reference).
+3. Define all target Subjects in subject_definitions citing respective Picture appearance and <Video N> motion for replaced subjects, and defining every other non-replaced subject in <Video 1> as its own <Subject N>. Define <Video 1> and <Audio 1> (timbre reference).
 4. Begin summary with `[video editing + reference generation + audio reference]`. State target video premise and attribute transfer without retelling the timeline.
-5. Write retention_analysis with one attribute_transfer line per active <Subject N>, <Video 1>: partially_preserved, and <Audio 1>: reference.
+5. Write retention_analysis with one attribute_transfer line per replaced <Subject N>, fully_preserved or partially_preserved for any non-replaced <Subject N>, <Video 1>: partially_preserved, and <Audio 1>: reference.
 6. Plan adaptive contiguous timestamp ranges matching the motion timeline of <Video 1>.
 7. Write detailed_description and Timeline with strict <Subject N> tags, explicit contact mechanics, zero pronouns ('They', 'their', 'both'), and 100% consistent appearance matching each <Subject N>'s reference picture across all shots (never revert to replaced video subjects' appearances).
-8. Keep synchronized [SPEECH], [SOUNDS], and [MUSIC] in the applicable timestamp blocks.
+8. Keep synchronized [SPEECH], [SOUNDS], and [MUSIC] in the applicable timestamp blocks, attributing any dialogue spoken by other subjects to their own <Subject N> (Sx) tag and never to the reference-replaced subject.
 9. Finish with overall_soundscape and non_diegetic_music.
 10. Verify zero occurrences of pronouns ('They', 'their', 'them', 'he', 'she', 'both') and verify that zero visual traits of replaced video subjects appear anywhere in the output.
 
@@ -2769,8 +2771,8 @@ one to three English sentences or N/A
 
 Use the following template as guideline for constructing proper prompt and timeline and everything within curly brace `{}` contains elements to replace and `N` in `{N}` is replaced by corresponding number.  
 Number of timestamp segments in the Timeline must be adjusted for accurate syncronization to movement, actions and/or dialogue or lyrics.  
-Original subjects from `<Video 1>` designated for replacement must NEVER be defined under `subject_definitions:`, nor described in summary or detailed description. `<Subject {N}>` represents target subjects in the video (including replacement subjects defined from matching `<Picture {N}>` and any non-replaced target subjects). No visual traits of replaced video subjects may appear in summary or detailed description. All defined `<Subject {N}>` entities are present throughout from 00.00s to the final frame with zero reversion.  
-Do NOT include lyrics or dialogue as [SPEECH] unless the subject in focus is the one singing or speaking. Completely leave out lyrics for theme music.  
+Original subjects from `<Video 1>` designated for replacement must NEVER be defined under `subject_definitions:`, nor described in summary or detailed description. `<Subject {N}>` represents target subjects in the video (including replacement subjects defined from matching `<Picture {N}>` and any non-replaced target subjects). Every other non-replaced subject present in `<Video 1>` must be defined as its own `<Subject {N}>` under `subject_definitions:` using its visible traits from `<Video 1>`. No visual traits of replaced video subjects may appear in summary or detailed description. All defined `<Subject {N}>` entities are present throughout from 00.00s to the final frame with zero reversion.  
+Do NOT include lyrics or dialogue as [SPEECH] unless an active `<Subject {N}>` is the one singing or speaking. When other subjects in `<Video 1>` have dialogue, attribute their `[SPEECH]` lines to their own `<Subject {N}> (S{N})` tag and never set their dialogue to be spoken by the reference-replaced subject. Completely leave out lyrics for theme music.  
 Do NOT invent sounds. Do NOT add nonsensical lyrics. If uncertain, omit lyrics entirely.  
 Do NOT add to [SOUNDS] unles there is actual sound effects that is verifiably coming from a subject. [SOUNDS] is not for music or instruments.  
 The number of segments presented in template is not an absolute maximum limit or absolute minimum limit. Number of segments depends scenes and actions in video.  
@@ -2860,7 +2862,7 @@ Use only the applicable natural declaration forms. The backticks in this instruc
 
 | Semantic tag declaration | Purpose in `subject_definitions` |
 | --- | --- |
-| `<Subject N> is ...` | completed target subject definition with visual identity from <Picture N> and motion from `<Video 1>` |
+| `<Subject N> is ...` | completed target subject definition (replacement subject citing <Picture N> appearance and `<Video 1>` motion, or non-replaced subject citing `<Video 1>`) |
 | `<Picture N> is ...` | reference image supplying visual identity and appearance |
 | `<Video 1> is ...` | source video providing camera movement, choreography, timing, and motion |
 | `<Audio 1> is ...` | full soundtrack containing all audio elements from `<Video 1>` |
@@ -2869,7 +2871,7 @@ Define every supported reference with its prompt role and the concrete visible o
 
 Use visual vocabulary appropriate to the governing style while preserving supported identity and visible traits. Retain an accurate source rendering-medium description when that style remains active. Do not carry a source medium into a conflicting requested target style.
 
-Do not invent production methods, unsupported additions, external identities, or speculative unseen Subjects. Define only static reusable content and reference roles in subject_definitions; do not narrate timeline actions, plot events, or motion progression here. Write exactly one definition per line deal where only other allowed mention is by direct other tag (such as citing source <Picture N>). Original subjects from `<Video 1>` designated for replacement are NEVER defined, named, described, or assigned <Subject N> aliases under `subject_definitions:`. Allocate <Subject N> aliases for target subjects in the video (including replacement subjects defined from <Picture N> and any non-replaced target subjects). State replacement mappings exclusively in `summary:` and `retention_analysis:`.
+Do not invent production methods, unsupported additions, external identities, or speculative unseen Subjects. Define only static reusable content and reference roles in subject_definitions; do not narrate timeline actions, plot events, or motion progression here. Write exactly one definition per line deal where only other allowed mention is by direct other tag (such as citing source <Picture N>). Original subjects from `<Video 1>` designated for replacement are NEVER defined, named, described, or assigned <Subject N> aliases under `subject_definitions:`. Allocate <Subject N> aliases for target subjects in the video (including replacement subjects defined from <Picture N> and any non-replaced target subjects). Every other non-replaced subject present in `<Video 1>` must be defined as its own <Subject N> in `subject_definitions:` using its visible traits from `<Video 1>`. State replacement mappings exclusively in `summary:` and `retention_analysis:`.
 
 Create and number <Subject N> aliases only for reusable content supported by visible evidence or explicitly introduced by `\\{user_query\\}`. Define each alias once.
 
@@ -2891,6 +2893,7 @@ Write one concise line for every separately tracked label. Preserve the role def
 
 `<Subject 1>: attribute_transfer - full visual identity, appearance, and styling transferred onto the motion definition of <Video 1>`  
 `<Video 1>: partially_preserved - retains full camera movement, choreography, timing, and scene progression with source subjects replaced by defined <Subject N> entities (for single subject: with subject replaced by <Subject 1>)`  
+For any non-replaced <Subject N> from `<Video 1>`, write `<Subject N>: fully_preserved` or `partially_preserved` according to its retained role.  
 `<Audio 1>: fully_copy - source audio track is copied entirely`  
 
 Use partially_preserved only when some source <Video N> content itself remains visible.
@@ -2955,7 +2958,7 @@ Maintain concrete visual-motion language throughout every [VISUAL] line. Continu
 
 Because the soundtrack is copied directly from `<Audio 1>`, preserve all audible dialogue and lyrics present in `<Audio 1>` verbatim inside `<d>`.
 
-Assign stable speaker identifiers in actual vocal-event order. A speaker keeps the same ID across every Shot. A <Subject N> that never vocalizes receives no speaker ID.
+Assign stable speaker identifiers in actual vocal-event order. A speaker keeps the same ID across every Shot. A <Subject N> that never vocalizes receives no speaker ID. Attribute every [SPEECH] line strictly to the <Subject N> (Sx) who speaks it; if other subjects in `<Video 1>` have dialogue, assign their dialogue to their own <Subject N> (Sx) tag and never set it to be spoken by the reference-replaced subject.
 
 When several already-numbered speakers vocalize together, use one compound ID in the form (S1,S2).
 
@@ -3008,12 +3011,12 @@ The number of Subjects described must match the number clearly featured in the i
 
 1. Analyze reference Pictures and source Video. Identify target Subject visual traits from each Picture and motion/camera from Video. Completely discard the visual identity, features, and styling of any subject in <Video 1> designated for replacement.
 2. Parse `\\{user_query\\}` and the user request for exact duration, requested development, replacement mappings, dialogue, lyrics, sound, and music.
-3. Define all target Subjects in subject_definitions citing respective Picture appearance and <Video N> motion. Define <Video 1> and <Audio 1>.
+3. Define all target Subjects in subject_definitions citing respective Picture appearance and <Video N> motion for replaced subjects, and defining every other non-replaced subject in <Video 1> as its own <Subject N>. Define <Video 1> and <Audio 1>.
 4. Begin summary with `[video editing + reference generation + audio reuse]`. State target video premise and attribute transfer without retelling the timeline.
-5. Write retention_analysis with one attribute_transfer line per active <Subject N>, <Video 1>: partially_preserved, and <Audio 1>: fully_copy.
+5. Write retention_analysis with one attribute_transfer line per replaced <Subject N>, fully_preserved or partially_preserved for any non-replaced <Subject N>, <Video 1>: partially_preserved, and <Audio 1>: fully_copy.
 6. Plan adaptive contiguous timestamp ranges matching the motion timeline of <Video 1>.
 7. Write detailed_description and Timeline with strict <Subject N> tags, explicit contact mechanics, zero pronouns ('They', 'their', 'both'), and 100% consistent appearance matching each <Subject N>'s reference picture across all shots (never revert to replaced video subjects' appearances).
-8. Keep synchronized [SPEECH], [SOUNDS], and [MUSIC] in the applicable timestamp blocks.
+8. Keep synchronized [SPEECH], [SOUNDS], and [MUSIC] in the applicable timestamp blocks, attributing any dialogue spoken by other subjects to their own <Subject N> (Sx) tag and never to the reference-replaced subject.
 9. Finish with overall_soundscape and non_diegetic_music.
 10. Verify zero occurrences of pronouns ('They', 'their', 'them', 'he', 'she', 'both') and verify that zero visual traits of replaced video subjects appear anywhere in the output.
 
@@ -3170,7 +3173,7 @@ Use visual vocabulary appropriate to the governing style while preserving suppor
 
 Do not invent production methods, unsupported additions, external identities, or speculative unseen Subjects. Define only static reusable content and reference roles in subject_definitions; do not narrate timeline actions, plot events, or motion progression here. A label never replaces the full Subject, scene, object, style, action, motion, camera, sound, or continuity specification.
 
-Create and number <Subject N> aliases only for reusable content supported by visible evidence or explicitly introduced by `\\{user_query\\}`. Define each alias once.
+Create and number <Subject N> aliases only for reusable content supported by visible evidence or explicitly introduced by `\\{user_query\\}`. Define each alias once. When a reference <Picture N> replaces a subject in <Video N>, never define the replaced <Video N> subject; define the replacement as its own <Subject N> from <Picture N> and define every other non-replaced subject present in <Video N> as its own <Subject N> using its visible traits from <Video N>.
 
 In every Timeline segment, every mentioned <Subject N> action must include that Subject's literal <Subject N> alias at the action mention. Every action, motion, giver, receiver, target, and touched body part must explicitly name the literal <Subject N> tag (write '<Subject 1> takes the ball from <Subject 2>', not 'from her'). Never use pronouns ('he', 'she', 'him', 'her', 'his', 'their', 'They', 'Them', 'Their', 'He', 'She') or summarizing group words ('both', 'Both', 'they', 'them', 'the subjects', 'the couple', 'the pair') anywhere in [VISUAL]. Every action and sentence starter must explicitly write the literal tags: write '<Subject 1> and <Subject 2>', never 'They' or 'Both'. Never use 'their' for shared body parts or mutual actions: write 'the hands of <Subject 1> and <Subject 2>', '<Subject 1> and <Subject 2> clasp hands', or 'the lips of <Subject 1> press against the lips of <Subject 2>', never 'their hands', 'their bodies', or 'their lips'. Repeat the alias whenever another action is attributed to that Subject, as well as after a cut, re-entry, or speech attribution. Preserve identity through concrete traits and relationships.
 
@@ -3315,7 +3318,7 @@ When several already-numbered speakers vocalize together, use one compound ID in
 
 At a speaker’s first vocal event, establish supported character type, apparent age, supported or requested gender, on-screen or off-screen state, pitch, timbre, speaking rate, and accent when evidence or instruction supports those properties. Do not invent an unsupported identity or voice property.
 
-For a referenced speaking Subject, write [SPEECH]: <Subject N> (Sx) <d>[Language] spoken content</d>. Keep identity, source, action, and delivery outside <d>. Keep only the language tag and spoken words inside <d>.
+For a referenced speaking Subject, write [SPEECH]: <Subject N> (Sx) <d>[Language] spoken content</d>. Keep identity, source, action, and delivery outside <d>. Keep only the language tag and spoken words inside <d>. Attribute every [SPEECH] line strictly to the <Subject N> (Sx) who speaks it; if other subjects in the video have dialogue, assign their dialogue to their own <Subject N> (Sx) tag and never set it to be spoken by the reference-replaced subject.
 
 When a referenced <Subject N> speaks off-screen, retain the same <Subject N> and (Sx) and mark the source off-screen. When a speaker has no <Subject N> definition, use one stable voice description followed by (Sx).
 
@@ -4397,7 +4400,8 @@ one to three English sentences or N/A
 
 Use the following template as guideline for constructing proper prompt and timeline and everything within curly brace `{}` contains elements to replace and `N` in `{N}` is replaced by corresponding number.  
 Number of timestamp segments in the Timeline must be adjusted for accurate syncronization to movement, actions and/or dialogue or lyrics.  
-Do NOT include lyrics or dialogue as [SPEECH] unless the subject in focus is the one singing or speaking. Completely leave out lyrics for theme music.  
+Original subjects from `<Video 1>` designated for replacement must NEVER be defined under `subject_definitions:`, nor described in summary or detailed description. Every other non-replaced subject present in `<Video 1>` must be defined as its own `<Subject {N}>` under `subject_definitions:` using its visible traits from `<Video 1>`.  
+Do NOT include lyrics or dialogue as [SPEECH] unless an active `<Subject {N}>` is the one singing or speaking. When other subjects in `<Video 1>` have dialogue, attribute their `[SPEECH]` lines to their own `<Subject {N}> (S{N})` tag and never set their dialogue to be spoken by the reference-replaced subject. Completely leave out lyrics for theme music.  
 Do NOT invent sounds. Do NOT add nonsensical lyrics. If uncertain, omit lyrics entirely.  
 Do NOT add to [SOUNDS] unles there is actual sound effects that is verifiably coming from a subject. [SOUNDS] is not for music or instruments.  
 The number of segments presented in example is not an absolute maximum limit or absolute minimum limit. Number of segments depends scenes and actions in video.  
@@ -4500,7 +4504,7 @@ Use visual vocabulary appropriate to the governing style while preserving suppor
 
 Do not invent production methods, unsupported additions, external identities, or speculative unseen Subjects. Define only static reusable content and reference roles in subject_definitions; do not narrate timeline actions, plot events, or motion progression here. A label never replaces the full Subject, scene, object, style, action, motion, camera, sound, or continuity specification.
 
-Create and number <Subject N> aliases only for reusable content supported by visible evidence or explicitly introduced by `\\{user_query\\}`. Define each alias once.
+Create and number <Subject N> aliases only for reusable content supported by visible evidence or explicitly introduced by `\\{user_query\\}`. Define each alias once. Original subjects from <Video 1> designated for replacement are NEVER defined, named, described, or assigned <Subject N> aliases under subject_definitions:; define every replacement subject from its <Picture N> and define every other non-replaced subject present in <Video 1> as its own <Subject N> using its visible traits from <Video 1>.
 
 Treat every <Subject N> alias as a fixed label rather than a word or name. In generated output, emit it as plain text without backticks or quotation marks. Do not attach an apostrophe, possessive marker, contraction, plural ending, hyphen, punctuation mark, or grammatical suffix directly to the closing >. Separate the tag from following prose with whitespace. Express possession through relational sentence structure. Correct possession form: the red sash worn by `<Subject 1>`. Forbidden possession form: `<Subject 1>`'s red sash.
 
@@ -4641,7 +4645,7 @@ When several already-numbered speakers vocalize together, use one compound ID in
 
 At a speaker’s first vocal event, establish supported character type, apparent age, supported or requested gender, on-screen or off-screen state, pitch, timbre, speaking rate, and accent when evidence or instruction supports those properties. Do not invent an unsupported identity or voice property.
 
-For a referenced speaking Subject, write [SPEECH]: <Subject N> (Sx) `<d>`[Language] spoken content`</d>`. Keep identity, source, action, and delivery outside `<d>`. Keep only the language tag and spoken words inside `<d>`.
+For a referenced speaking Subject, write [SPEECH]: <Subject N> (Sx) `<d>`[Language] spoken content`</d>`. Keep identity, source, action, and delivery outside `<d>`. Keep only the language tag and spoken words inside `<d>`. Attribute every [SPEECH] line strictly to the <Subject N> (Sx) who speaks it; if other subjects in <Video 1> have dialogue, assign their dialogue to their own <Subject N> (Sx) tag and never set it to be spoken by the reference-replaced subject.
 
 When a referenced <Subject N> speaks off-screen, retain the same <Subject N> and (Sx) and mark the source off-screen. When a speaker has no <Subject N> definition, use one stable voice description followed by (Sx).
 
