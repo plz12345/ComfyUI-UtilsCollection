@@ -12,7 +12,6 @@ import logging
 import numbers
 import threading
 from einops import rearrange
-from safetensors.torch import save_file
 from enum import Enum
 from fractions import Fraction
 from pathlib import Path
@@ -26,7 +25,7 @@ import comfy
 import comfy.model_management
 import comfy.nested_tensor
 import comfy.utils
-from .helper_functions import resize_nchw
+from .helper_functions import atomic_uel_writer, resize_nchw
 from .image_helpers import VIDEO_FRAME_TIMESTAMP_FORMATS, format_video_timestamp, parse_video_timestamps
 from .minimax_h3_guide_helpers import (
     LAYOUT_KEY, build_layout, splice_conditioning,
@@ -2494,12 +2493,17 @@ def save_blended_visual_embeddings(
         raise ValueError("No ComfyUI embeddings directory is configured.")
     embeddings_dir = embed_paths[0]
     full_save_path = resolve_embedding_output_path(embeddings_dir, save_name)
-    os.makedirs(os.path.dirname(full_save_path), exist_ok=True)
 
     # State dict must contain exactly one layer matching the VLM's dynamic embedding_key
     state_dict = {embedding_key: stacked_vis.contiguous()}
-    save_file(state_dict, full_save_path)
+    save_uel_embedding_safetensors(full_save_path, state_dict)
     logging.info(f"[UC_VisualFusionConfig] Saved visual prompt block as {embedding_key} embedding to: {full_save_path}")
+
+
+def save_uel_embedding_safetensors(target_path: str, state_dict: Mapping[str, torch.Tensor]) -> None:
+    """Atomically write embedding tensors using UnifiedEfficientLoader batch saving."""
+    with atomic_uel_writer(target_path) as writer:
+        writer.write_batch([(k, v.contiguous()) for k, v in state_dict.items()])
 
 
 def _visual_token_embedding_blocks(clip, tokens, device: str, cache=None) -> list[dict]:

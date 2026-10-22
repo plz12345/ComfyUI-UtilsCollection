@@ -322,8 +322,23 @@ class H3EncoderCache:
             properties_key = f"{key}.properties"
             if loader.get_dtype(properties_key) != torch.uint8 or loader.get_ndim(properties_key) != 1:
                 raise ValueError("H3 cache properties must be uint8")
-            properties = tensor_to_dict(loader.get_tensor(properties_key))
-            loader.mark_processed(properties_key)
+            properties_tensor = None
+            prop_stream = loader.async_stream([properties_key], batch_size=1, prefetch_batches=1, pin_memory=False)
+            try:
+                for batch in prop_stream:
+                    for name, tensor in batch:
+                        try:
+                            if name == properties_key:
+                                properties_tensor = tensor
+                        finally:
+                            loader.mark_processed(name)
+            finally:
+                close_prop = getattr(prop_stream, "close", None)
+                if callable(close_prop):
+                    close_prop()
+            if properties_tensor is None:
+                raise ValueError("H3 cache properties missing from stream")
+            properties = tensor_to_dict(properties_tensor)
             if (properties["version"], properties["stage"], properties["fingerprint"], properties["dependencies"]) != (2, stage, key, dependencies):
                 raise ValueError("H3 cache dependencies mismatch")
             specs = _tensor_specs(properties["result"])
@@ -336,10 +351,18 @@ class H3EncoderCache:
                 torch.device(spec["device"])
             tensors = {}
             if names:
-                for batch in loader.async_stream(names):
-                    for name, tensor in batch:
-                        tensors[name] = tensor
-                        loader.mark_processed(name)
+                tensor_stream = loader.async_stream(names, batch_size=1, prefetch_batches=1, pin_memory=False)
+                try:
+                    for batch in tensor_stream:
+                        for name, tensor in batch:
+                            try:
+                                tensors[name] = tensor
+                            finally:
+                                loader.mark_processed(name)
+                finally:
+                    close_tensor = getattr(tensor_stream, "close", None)
+                    if callable(close_tensor):
+                        close_tensor()
         return _unpack(properties["result"], tensors)
 
     def _write(self, path, stage, key, dependencies, result):
@@ -350,12 +373,16 @@ class H3EncoderCache:
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
         try:
-            with IncrementalSafetensorsWriter(str(temporary), metadata={
-                "uc_h3_cache_version": "2", "uc_h3_cache_stage": stage, "uc_h3_cache_key": key,
-            }) as writer:
-                writer.write(f"{key}.properties", properties_tensor)
-                for name, tensor in tensors.items():
-                    writer.write(name, tensor)
+            with IncrementalSafetensorsWriter(
+                str(temporary),
+                metadata={
+                    "uc_h3_cache_version": "2",
+                    "uc_h3_cache_stage": stage,
+                    "uc_h3_cache_key": key,
+                },
+                max_workers=1,
+            ) as writer:
+                writer.write_batch([(f"{key}.properties", properties_tensor), *tensors.items()])
             os.replace(temporary, path)
         finally:
             try:

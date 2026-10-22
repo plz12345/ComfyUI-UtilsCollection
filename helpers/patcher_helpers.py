@@ -44,7 +44,7 @@ import comfy.utils
 import folder_paths
 from comfy.text_encoders.minimax import process_video_block, token_tags_from_embeds_info
 from comfy.ldm.minimax import model as minimax_model
-from safetensors import safe_open
+from .helper_functions import read_uel_safetensors_dict
 
 
 MINIMAX_H3_CACHE_OWNER_KEY = "utilscollection_minimax_h3_cache"
@@ -167,9 +167,7 @@ def load_minimax_h3_projection(name: str) -> tuple[dict[str, torch.Tensor], int]
     if not name.lower().endswith(".safetensors"):
         raise ValueError("MiniMax H3 projections must use the .safetensors format.")
     path = folder_paths.get_full_path_or_raise(MINIMAX_H3_PROJECTION_FOLDER, name)
-    with safe_open(path, framework="pt", device="cpu") as handle:
-        data = {key: handle.get_tensor(key) for key in handle.keys()}
-        metadata = handle.metadata() or {}
+    data, metadata = read_uel_safetensors_dict(path)
     required = ("mean_in", "std_in", "mean_out", "std_out")
     missing = [key for key in required if key not in data]
     if missing:
@@ -748,7 +746,7 @@ def rebase_pdd_for_pruned_model(model: Any, lora_state: dict[str, torch.Tensor])
     table = diffusion_model.adaln_t_table.detach().to(torch.float32).cpu()
     candidates = []
     for path in sorted(PDD_BASIS_DIR.glob("basis_*.safetensors")):
-        data = comfy.utils.load_torch_file(str(path), safe_load=True)
+        data, _ = read_uel_safetensors_dict(path)
         candidates.append(path.name)
         basis_table = data["adaln_t_table"]
         if basis_table.shape == table.shape and torch.allclose(basis_table, table, atol=1e-6):
@@ -2557,8 +2555,9 @@ def patch_unified_attention_model(model: Any, attention_mode: dict[str, Any]) ->
 def load_ideogram4_debanner_directions() -> dict[int, torch.Tensor]:
     if not IDEOGRAM4_DEBANNER_BUNDLE.is_file():
         raise FileNotFoundError(f"Ideogram 4 debanner bundle is missing: {IDEOGRAM4_DEBANNER_BUNDLE}")
-    with safe_open(str(IDEOGRAM4_DEBANNER_BUNDLE), framework="pt", device="cpu") as handle:
-        return {index: handle.get_tensor(f"direction.block_{index:02d}") for index in range(25, 29)}
+    target_keys = [f"direction.block_{index:02d}" for index in range(25, 29)]
+    tensors, _ = read_uel_safetensors_dict(IDEOGRAM4_DEBANNER_BUNDLE, target_keys)
+    return {index: tensors[f"direction.block_{index:02d}"] for index in range(25, 29)}
 
 
 def _validate_ideogram4_debanner_directions(directions: dict[int, torch.Tensor]) -> None:

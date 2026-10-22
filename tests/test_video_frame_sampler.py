@@ -1535,7 +1535,7 @@ def test_h3_reference_node_reuses_window_cache_after_output_eviction(tmp_path, m
 
 
 def test_h3_legacy_video_cache_migrates_without_decoding_source(tmp_path, monkeypatch):
-    from safetensors.torch import save_file
+    from unifiedefficientloader import IncrementalSafetensorsWriter
     from utils_collection_video_frame_sampler_test.helpers import image_helpers as cache
 
     monkeypatch.setattr(cache.folder_paths, "get_temp_directory", lambda: str(tmp_path))
@@ -1548,9 +1548,12 @@ def test_h3_legacy_video_cache_migrates_without_decoding_source(tmp_path, monkey
     legacy.parent.mkdir(parents=True)
     frames = torch.ones(3, 8, 8, 3)
     audio = torch.tensor([[[0.125, -0.75]]])
-    save_file({"frames": frames, "audio": audio}, str(legacy), metadata={
-        "source_hash": key, "frame_rate": "24", "sample_rate": "32000",
-    })
+    with IncrementalSafetensorsWriter(
+        str(legacy),
+        metadata={"source_hash": key, "frame_rate": "24", "sample_rate": "32000"},
+        max_workers=1,
+    ) as writer:
+        writer.write_batch([("frames", frames), ("audio", audio)])
 
     def forbidden(video):
         pytest.fail("Migration must not decode the source video")

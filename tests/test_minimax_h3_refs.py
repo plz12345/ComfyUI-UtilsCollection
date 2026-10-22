@@ -886,7 +886,7 @@ def test_save_load_collision_fingerprint_and_containment(monkeypatch, tmp_path):
     old_stat = path.stat()
     metadata = model_helpers._minimax_h3_ref_storage_metadata(_image_ref(3.0))
     with IncrementalSafetensorsWriter(str(path), metadata={"ref_meta": json.dumps(metadata)}, max_workers=1) as writer:
-        writer.write("latent", _image_ref(3.0)["latent"])
+        writer.write_batch([("latent", _image_ref(3.0)["latent"])])
     os.utime(path, ns=(old_stat.st_atime_ns, old_stat.st_mtime_ns + 1_000_000_000))
     assert model_helpers.get_minimax_h3_ref_input_fingerprint(first[0]) != before
     assert str(path.resolve()) in before
@@ -996,8 +996,7 @@ def test_loads_original_style_bundle_members(monkeypatch, tmp_path):
         {"kind": "audio", "latent_t": 5, "latent_h": 0, "latent_w": 0, "mode": "encode", "description": "voice"},
     ]}
     with IncrementalSafetensorsWriter(str(tmp_path / "original_bundle.safetensors"), metadata={"refmod_meta": json.dumps(metadata)}, max_workers=1) as writer:
-        writer.write("ref_0", _image_ref()["latent"])
-        writer.write("ref_1", torch.ones((1, 32, 2, 5)))
+        writer.write_batch([("ref_0", _image_ref()["latent"]), ("ref_1", torch.ones((1, 32, 2, 5)))])
     loaded = model_helpers.load_minimax_h3_ref_collection("original_bundle.safetensors")
     assert [ref["kind"] for ref in loaded] == ["image", "audio"]
     assert [ref["metadata"]["description"] for ref in loaded] == ["subject", "voice"]
@@ -1009,7 +1008,7 @@ def test_bundle_rejects_member_dimensions_that_disagree_with_tensor(monkeypatch,
         {"kind": "image", "latent_t": 1, "latent_h": 2, "latent_w": 4},
     ]}
     with IncrementalSafetensorsWriter(str(tmp_path / "bad_bundle.safetensors"), metadata={"refmod_meta": json.dumps(metadata)}, max_workers=1) as writer:
-        writer.write("ref_0", _image_ref()["latent"])
+        writer.write_batch([("ref_0", _image_ref()["latent"])])
     with pytest.raises(ValueError, match="member dimensions"):
         model_helpers.load_minimax_h3_ref_collection("bad_bundle.safetensors")
 
@@ -1098,8 +1097,7 @@ def test_load_rejects_incomplete_qwen_tensor_pair(monkeypatch, tmp_path):
     target = tmp_path / "incomplete.safetensors"
     metadata = model_helpers._minimax_h3_ref_storage_metadata(_image_ref())
     with IncrementalSafetensorsWriter(str(target), metadata={"refmod_meta": json.dumps(metadata)}, max_workers=1) as writer:
-        writer.write("latent", _image_ref()["latent"])
-        writer.write("vlm_embedding", torch.ones((1, 2, 4)))
+        writer.write_batch([("latent", _image_ref()["latent"]), ("vlm_embedding", torch.ones((1, 2, 4)))])
     with pytest.raises(ValueError, match="invalid tensor set"):
         model_helpers.load_minimax_h3_ref("incomplete.safetensors")
 
@@ -1108,13 +1106,13 @@ def test_load_rejects_wrong_header_shape_and_dtype(monkeypatch, tmp_path):
     _ref_folder(monkeypatch, tmp_path)
     original_metadata = {"kind": "image", "latent_t": 1, "latent_h": 4, "latent_w": 4, "mode": "encode", "description": "original format", "_format_version": 4}
     with IncrementalSafetensorsWriter(str(tmp_path / "original.safetensors"), metadata={"refmod_meta": json.dumps(original_metadata)}, max_workers=1) as writer:
-        writer.write("latent", _image_ref()["latent"])
+        writer.write_batch([("latent", _image_ref()["latent"])])
     original = model_helpers.load_minimax_h3_ref("original.safetensors")
     torch.testing.assert_close(original["latent"], _image_ref()["latent"])
     assert original["metadata"]["description"] == "original format"
     wrong_header = tmp_path / "wrong.safetensors"
     with IncrementalSafetensorsWriter(str(wrong_header), max_workers=1) as writer:
-        writer.write("latent", _image_ref()["latent"])
+        writer.write_batch([("latent", _image_ref()["latent"])])
     with pytest.raises(ValueError, match="does not contain MiniMax H3 reference metadata"):
         model_helpers.load_minimax_h3_ref("wrong.safetensors")
 
@@ -1122,14 +1120,14 @@ def test_load_rejects_wrong_header_shape_and_dtype(monkeypatch, tmp_path):
     metadata = model_helpers._minimax_h3_ref_storage_metadata(_image_ref())
     metadata["shape"] = [1, 24, 1, 2, 2]
     with IncrementalSafetensorsWriter(str(shape_header), metadata={"refmod_meta": json.dumps(metadata)}, max_workers=1) as writer:
-        writer.write("latent", _image_ref()["latent"])
+        writer.write_batch([("latent", _image_ref()["latent"])])
     with pytest.raises(ValueError, match="metadata does not match"):
         model_helpers.load_minimax_h3_ref("shape.safetensors")
 
     dtype_header = tmp_path / "dtype.safetensors"
     metadata = model_helpers._minimax_h3_ref_storage_metadata(_image_ref())
     with IncrementalSafetensorsWriter(str(dtype_header), metadata={"refmod_meta": json.dumps(metadata)}, max_workers=1) as writer:
-        writer.write("latent", torch.ones((1, 24, 1, 4, 4), dtype=torch.int32))
+        writer.write_batch([("latent", torch.ones((1, 24, 1, 4, 4), dtype=torch.int32))])
     with pytest.raises(ValueError, match="floating-point"):
         model_helpers.load_minimax_h3_ref("dtype.safetensors")
 

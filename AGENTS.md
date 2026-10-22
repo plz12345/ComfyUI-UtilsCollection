@@ -113,3 +113,27 @@ rules and must remain local only; do not stage or commit it.
 - After synchronization, syntax, or escaping failure, inspect the scoped state
   and utility contract, then validate a deterministic correction before mutation.
   Do not restore dirty runtime data from HEAD or discard uncertain changes.
+
+## UnifiedEfficientLoader safetensors I/O and registry scanner rules
+
+- All `.safetensors` tensor reading and writing across `nodes/`, `helpers/`,
+  `models/`, `scripts/`, and `tests/` must use `unifiedefficientloader`
+  (`MemoryEfficientSafeOpen` / `UnifiedSafetensorsLoader` with `low_memory=True`
+  and `IncrementalSafetensorsWriter(..., max_workers=1)`).
+- Direct `safetensors` tensor I/O (`from safetensors.torch import save_file`,
+  `load_file`, `from safetensors import safe_open`) and synchronous
+  `.get_tensor(` calls are forbidden.
+- Reading tensors must use `async_stream(..., batch_size=1, prefetch_batches=1, pin_memory=...)`,
+  call `mark_processed(key)` in `finally` for every yielded tensor, and close
+  both the stream and handler in `finally` (or use `read_uel_safetensors_dict`
+  from `helpers/helper_functions.py`).
+- Writing `.safetensors` files must write to a sibling `.{basename}.{uuid}.tmp`
+  file via `atomic_uel_writer` (from `helpers/helper_functions.py`) or
+  `IncrementalSafetensorsWriter(..., max_workers=1)`, submit tensors via
+  `writer.write_batch(...)` (do not call `writer.write(`), atomically replace
+  the destination only after the writer context exits cleanly, and unlink any
+  leftover `.tmp` file in `finally`.
+- Never use `.eval(` anywhere in repository code or tests; the Comfy Registry
+  static scanner flags `.eval(` substring matches. Use `.train(False)` on
+  `torch.nn.Module` instances when disabling training mode.
+

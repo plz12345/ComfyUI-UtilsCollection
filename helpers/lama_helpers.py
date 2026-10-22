@@ -117,7 +117,7 @@ def load_lama_model(model_path: str | Path, device_option: str):
     finally:
         handler.close()
 
-    model.eval()
+    model.train(False)
     load_device = resolve_lama_device(device_option)
     offload_device = (
         torch.device("cpu")

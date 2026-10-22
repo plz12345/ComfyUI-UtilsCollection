@@ -59,6 +59,7 @@ from .encoder_helpers import (
     prepare_minimax_h3_reference_video,
     validate_minimax_h3_clip_continuation_media,
 )
+from .helper_functions import atomic_uel_writer, read_uel_safetensors_dict
 from .minimax_h3_guide_helpers import splice_conditioning
 
 
@@ -151,7 +152,7 @@ def load_pose_safetensors(path, architecture):
             stream.close()
     finally:
         handler.close()
-    model.eval()
+    model.train(False)
     offload = comfy.model_management.unet_offload_device()
     model.to(offload)
     return comfy.model_patcher.CoreModelPatcher(
@@ -262,10 +263,8 @@ def load_yolo_model(model_name):
 def yolo_forward(patcher, images_nchw):
     comfy.model_management.throw_exception_if_processing_interrupted()
     comfy.model_management.load_models_gpu([patcher])
-    patcher.model.eval()
     dtype = next(patcher.model.parameters()).dtype
-    with torch.no_grad():
-        output = patcher.model(images_nchw.to(device=patcher.load_device, dtype=dtype))
+    output = patcher.model(images_nchw.to(device=patcher.load_device, dtype=dtype))
     if isinstance(output, (tuple, list)):
         return tuple(value.detach().float() for value in output)
     return output.detach().float()
@@ -320,14 +319,12 @@ def load_depth_anything_model(model_name):
 def depth_anything_forward(patcher, images_5d, ref_view_strategy="saddle_balanced", compute_ray=False):
     comfy.model_management.throw_exception_if_processing_interrupted()
     comfy.model_management.load_models_gpu([patcher])
-    patcher.model.eval()
     dtype = next(patcher.model.parameters()).dtype
-    with torch.no_grad():
-        output = patcher.model(
-            images_5d.to(device=patcher.load_device, dtype=dtype),
-            ref_view_strategy=ref_view_strategy,
-            compute_ray=compute_ray,
-        )
+    output = patcher.model(
+        images_5d.to(device=patcher.load_device, dtype=dtype),
+        ref_view_strategy=ref_view_strategy,
+        compute_ray=compute_ray,
+    )
     return {
         key: value.detach().float().cpu() if torch.is_tensor(value) else value
         for key, value in output.items()
@@ -1264,21 +1261,16 @@ def save_minimax_h3_clip_continuation_media(
             separators=(",", ":"), sort_keys=True,
         )
     }
-    descriptor, temporary = tempfile.mkstemp(prefix=".h3-continuation-", suffix=".tmp", dir=path.parent)
-    os.close(descriptor)
-    try:
-        with IncrementalSafetensorsWriter(temporary, metadata=metadata, max_workers=1) as writer:
-            if tail is not None:
-                writer.write("frames", tail)
-            if audio_tail is not None:
-                writer.write("audio", audio_tail)
-            if video_latent is not None and audio_latent is not None:
-                writer.write("video_latent", video_latent)
-                writer.write("audio_latent", audio_latent)
-        os.replace(temporary, path)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
+    batch_items = []
+    if tail is not None:
+        batch_items.append(("frames", tail))
+    if audio_tail is not None:
+        batch_items.append(("audio", audio_tail))
+    if video_latent is not None and audio_latent is not None:
+        batch_items.append(("video_latent", video_latent))
+        batch_items.append(("audio_latent", audio_latent))
+    with atomic_uel_writer(path, metadata) as writer:
+        writer.write_batch(batch_items)
     return str(path.relative_to(_minimax_h3_clip_continuation_root())).replace("\\", "/")
 
 
@@ -1338,8 +1330,16 @@ def _load_minimax_h3_clip_continuation_media_path(path: Path) -> dict:
         keys = set(handle.keys())
         raw_meta_dict = handle.metadata() or {}
         if raw_meta_dict.get("format") == "h3_motion_context_av_v1" and keys == {"video", "audio"}:
-            video_latent = handle.get_tensor("video").detach().clone().contiguous()
-            audio_latent = handle.get_tensor("audio").detach().clone().contiguous()
+            streamed = {}
+            with closing(handle.async_stream(["video", "audio"], batch_size=1, prefetch_batches=1, pin_memory=False)) as stream:
+                for batch in stream:
+                    for name, value in batch:
+                        try:
+                            streamed[name] = value.detach().clone().contiguous()
+                        finally:
+                            handle.mark_processed(name)
+            video_latent = streamed["video"]
+            audio_latent = streamed["audio"]
             return {
                 "format_version": 1,
                 "frame_rate": 24,
@@ -2402,11 +2402,13 @@ def save_minimax_h3_ref_collection(refs: list[dict], filename_prefix: str, bundl
             os.close(descriptor)
             try:
                 with IncrementalSafetensorsWriter(temporary, metadata=metadata, max_workers=1) as writer:
+                    batch_items = []
                     for index, ref in enumerate(refs):
-                        writer.write(f"ref_{index}", ref["latent"])
+                        batch_items.append((f"ref_{index}", ref["latent"]))
                         if "vlm_embedding" in ref:
-                            writer.write(f"ref_{index}.vlm_embedding", ref["vlm_embedding"])
-                            writer.write(f"ref_{index}.vlm_tags", ref["vlm_tags"])
+                            batch_items.append((f"ref_{index}.vlm_embedding", ref["vlm_embedding"]))
+                            batch_items.append((f"ref_{index}.vlm_tags", ref["vlm_tags"]))
+                    writer.write_batch(batch_items)
                 if os.name == "nt":
                     os.rename(temporary, target)
                 else:
@@ -2430,10 +2432,11 @@ def save_minimax_h3_ref_collection(refs: list[dict], filename_prefix: str, bundl
             os.close(descriptor)
             try:
                 with IncrementalSafetensorsWriter(temporary, metadata=metadata, max_workers=1) as writer:
-                    writer.write("latent", ref["latent"].detach())
+                    batch_items = [("latent", ref["latent"].detach())]
                     if "vlm_embedding" in ref:
-                        writer.write("vlm_embedding", ref["vlm_embedding"])
-                        writer.write("vlm_tags", ref["vlm_tags"])
+                        batch_items.append(("vlm_embedding", ref["vlm_embedding"]))
+                        batch_items.append(("vlm_tags", ref["vlm_tags"]))
+                    writer.write_batch(batch_items)
                 if os.name == "nt":
                     os.rename(temporary, target)
                 else:
@@ -4157,7 +4160,7 @@ def load_whisper_safetensors(path, model_name):
     load_device = comfy.model_management.get_torch_device()
     model.compute_dtype = comfy.model_management.unet_dtype(load_device, model_params=sum(t.numel() for t in expected.values()), supported_dtypes=[torch.float16, torch.float32])
     model.device = offload_device
-    model.eval().to(offload_device)
+    model.train(False).to(offload_device)
     return comfy.model_patcher.CoreModelPatcher(model, load_device=load_device, offload_device=offload_device)
 
 

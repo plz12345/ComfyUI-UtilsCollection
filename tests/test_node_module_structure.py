@@ -58,3 +58,78 @@ def test_node_modules_add_no_standalone_helpers():
         "Move standalone node-module helpers into focused *_helpers.py modules; "
         f"do not expand the legacy allowlist: {violations}"
     )
+
+
+def _iter_repo_python_files():
+    this_file = Path(__file__).resolve()
+    for folder in ("nodes", "helpers", "models", "scripts", "tests"):
+        for path in sorted((REPOSITORY_ROOT / folder).rglob("*.py")):
+            if path.resolve() != this_file:
+                yield path
+
+
+def test_repository_uses_uel_async_safetensors_io_only():
+    forbidden_Save_or_load = (
+        ".get_tensor(",
+        "from safetensors.torch",
+        "from safetensors import safe_open",
+        "import safetensors",
+        "save_file(",
+        "safe_open(",
+        "writer.write(",
+    )
+    violations = []
+    for path in _iter_repo_python_files():
+        source = path.read_text(encoding="utf-8")
+        rel = path.relative_to(REPOSITORY_ROOT).as_posix()
+        for token in forbidden_Save_or_load:
+            if token in source:
+                violations.append(f"{rel}: {token}")
+    assert violations == [], (
+        "Use UnifiedEfficientLoader async_stream + mark_processed and "
+        f"atomic_uel_writer + write_batch for all safetensors I/O: {violations}"
+    )
+
+
+def test_repository_has_no_eval_calls_for_registry_scanner():
+    violations = []
+    for path in _iter_repo_python_files():
+        source = path.read_text(encoding="utf-8")
+        if ".eval(" in source:
+            violations.append(path.relative_to(REPOSITORY_ROOT).as_posix())
+    assert violations == [], (
+        "Avoid .eval( in repository modules (flagged by Comfy Registry scanner); "
+        f"use .train(False) instead: {violations}"
+    )
+
+
+def test_atomic_uel_writer_preserves_destination_on_failure_and_roundtrips(tmp_path):
+    import importlib.util
+    import pytest
+    import torch
+
+    spec = importlib.util.spec_from_file_location(
+        "uc_helper_functions_uel_test",
+        REPOSITORY_ROOT / "helpers" / "helper_functions.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    output = tmp_path / "output.safetensors"
+    with module.atomic_uel_writer(output, {"version": "1"}) as writer:
+        writer.write_batch([("old", torch.tensor([1.0, 2.0]))])
+    original = output.read_bytes()
+
+    with pytest.raises(RuntimeError, match="planned failure"):
+        with module.atomic_uel_writer(output, {"version": "2"}) as writer:
+            writer.write_batch([("new", torch.tensor([3.0]))])
+            raise RuntimeError("planned failure")
+
+    assert output.read_bytes() == original
+    assert list(tmp_path.glob(".output.safetensors.*.tmp")) == []
+
+    tensors, metadata = module.read_uel_safetensors_dict(output)
+    assert metadata == {"version": "1"}
+    assert list(tensors) == ["old"]
+    assert torch.equal(tensors["old"], torch.tensor([1.0, 2.0]))
+

@@ -179,8 +179,9 @@ def test_available_safetensors_load_through_uel_without_inference(monkeypatch, f
     with model_helpers.MemoryEfficientSafeOpen(path, low_memory=True) as source:
         assert set(loaded) == set(source.keys())
         first, last = next(iter(loaded)), next(reversed(loaded))
-        assert torch.equal(loaded[first], source.get_tensor(first))
-        assert torch.equal(loaded[last], source.get_tensor(last))
+    streamed, _ = model_helpers.read_uel_safetensors_dict(path, [first, last])
+    assert torch.equal(loaded[first], streamed[first])
+    assert torch.equal(loaded[last], streamed[last])
 
 
 def test_pose_download_uses_registered_directory_and_reuses_existing_file(monkeypatch, tmp_path):
@@ -398,12 +399,14 @@ def test_new_pose_migrations_load_installed_safetensors_without_inference(monkey
         loaded = patcher.model.state_dict()
         assert set(loaded) == set(source.keys())
         last = next(reversed(loaded))
-        assert torch.equal(loaded[last], source.get_tensor(last))
-        if kind == "densepose_r50":
-            for name in ("roi_heads.box_head.fc1", "roi_heads.box_head.fc2", "roi_heads.box_predictor.cls_score", "roi_heads.box_predictor.bbox_pred"):
-                for suffix in ("weight", "bias"):
-                    key = f"{name}.{suffix}"
-                    assert torch.equal(loaded[key], source.get_tensor(key))
+    check_keys = [last]
+    if kind == "densepose_r50":
+        for name in ("roi_heads.box_head.fc1", "roi_heads.box_head.fc2", "roi_heads.box_predictor.cls_score", "roi_heads.box_predictor.bbox_pred"):
+            for suffix in ("weight", "bias"):
+                check_keys.append(f"{name}.{suffix}")
+    streamed, _ = model_helpers.read_uel_safetensors_dict(path, check_keys)
+    for key in check_keys:
+        assert torch.equal(loaded[key], streamed[key])
 
 
 @pytest.mark.parametrize("model_name", model_helpers.YOLO_MODELS)
@@ -431,8 +434,9 @@ def test_yolo_migrations_load_installed_safetensors_without_inference(monkeypatc
         loaded = patcher.model.state_dict()
         assert set(loaded) == set(source.keys())
         first, last = next(iter(loaded)), next(reversed(loaded))
-        assert torch.equal(loaded[first], source.get_tensor(first))
-        assert torch.equal(loaded[last], source.get_tensor(last))
+    streamed, _ = model_helpers.read_uel_safetensors_dict(path, [first, last])
+    assert torch.equal(loaded[first], streamed[first])
+    assert torch.equal(loaded[last], streamed[last])
 
 
 def test_yolo_detect_batches_frames_decodes_masks_and_builds_segs():
@@ -550,7 +554,7 @@ def test_yolo_dfl_and_c2psa_forward_math():
     decoded = dfl(logits)
     torch.testing.assert_close(decoded[0, :, 0], torch.tensor([0.0, 1.0, 2.0, 3.0]), atol=1e-4, rtol=1e-4)
 
-    psa = _C2PSA(128, 128, depth=1, operations=torch.nn).eval()
+    psa = _C2PSA(128, 128, depth=1, operations=torch.nn).train(False)
     sample = torch.zeros((1, 128, 4, 4), dtype=torch.float32)
     out = psa(sample)
     assert out.shape == (1, 128, 4, 4)
@@ -577,13 +581,15 @@ def test_depth_anything_migrations_load_installed_safetensors_without_inference(
     with model_helpers.MemoryEfficientSafeOpen(path, low_memory=True) as source:
         loaded = patcher.model.state_dict()
         assert set(loaded) == set(source.keys())
-        for check_key in (
-            next(iter(loaded)),
-            "backbone.pretrained.blocks.0.attn.qkv.weight",
-            "backbone.pretrained.blocks.0.attn.qkv.bias",
-            next(reversed(loaded)),
-        ):
-            assert torch.equal(loaded[check_key], source.get_tensor(check_key))
+    check_keys = [
+        next(iter(loaded)),
+        "backbone.pretrained.blocks.0.attn.qkv.weight",
+        "backbone.pretrained.blocks.0.attn.qkv.bias",
+        next(reversed(loaded)),
+    ]
+    streamed, _ = model_helpers.read_uel_safetensors_dict(path, check_keys)
+    for check_key in check_keys:
+        assert torch.equal(loaded[check_key], streamed[check_key])
 
 
 def test_depth_anything_architecture_rope_reordering_and_heads_forward_math():
@@ -618,7 +624,7 @@ def test_depth_anything_architecture_rope_reordering_and_heads_forward_math():
         rope_start=1,
         cat_token=True,
         operations=torch.nn,
-    ).eval()
+    ).train(False)
     sample_5d = torch.zeros((1, 3, 3, 28, 42), dtype=torch.float32)
     feats = vit.forward_features(sample_5d, out_layers=(1, 2), ref_view_strategy="middle")
     assert len(feats) == 2
@@ -631,7 +637,7 @@ def test_depth_anything_architecture_rope_reordering_and_heads_forward_math():
         features=16,
         out_channels=(8, 16, 32, 32),
         operations=torch.nn,
-    ).eval()
+    ).train(False)
     four_stage_feats = [(feats[0][0], feats[0][1])] * 4
     out_no_ray = dual_head(four_stage_feats, 28, 42, compute_ray=False)
     assert set(out_no_ray) == {"depth", "depth_conf"}
@@ -652,18 +658,18 @@ def test_depth_anything_architecture_rope_reordering_and_heads_forward_math():
         out_channels=(8, 16, 32, 32),
         use_sky_head=True,
         operations=torch.nn,
-    ).eval()
+    ).train(False)
     mono_feats = [(feats[0][0][..., :32], feats[0][1][..., :32])] * 4
     mono_out = mono_head(mono_feats, 28, 42)
     assert set(mono_out) == {"depth", "sky"}
     assert mono_out["depth"].shape == (1, 3, 28, 42)
     assert mono_out["sky"].shape == (1, 3, 28, 42)
 
-    cam_dec = _CameraDec(dim_in=64, operations=torch.nn).eval()
+    cam_dec = _CameraDec(dim_in=64, operations=torch.nn).train(False)
     pose_enc = cam_dec(feats[-1][1])
     assert pose_enc.shape == (1, 3, 9)
 
-    cam_enc = _CameraEnc(dim_out=32, num_heads=4, operations=torch.nn).eval()
+    cam_enc = _CameraEnc(dim_out=32, num_heads=4, operations=torch.nn).train(False)
     ext = torch.eye(4, dtype=torch.float32).unsqueeze(0).unsqueeze(0).expand(1, 3, 4, 4).clone()
     ixt = torch.tensor([[[28.0, 0.0, 21.0], [0.0, 28.0, 14.0], [0.0, 0.0, 1.0]]]).unsqueeze(0).expand(1, 3, 3, 3).clone()
     cam_tok = cam_enc(ext, ixt, (28, 42))

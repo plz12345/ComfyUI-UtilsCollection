@@ -1771,7 +1771,7 @@ def test_moss_image_edit_patcher_end_to_end():
         dtype=torch.float32,
         device="cpu",
         operations=torch.nn,
-    ).eval()
+    ).train(False)
 
     class FakeModelSampling:
         def percent_to_sigma(self, percent: float) -> float:

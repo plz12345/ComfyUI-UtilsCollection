@@ -1,7 +1,10 @@
-from typing import List, Union
+from contextlib import closing, contextmanager
+from pathlib import Path
+from typing import List, Sequence, Union
 from PIL import Image
 from enum import Enum
 import numpy as np
+import os
 import re
 import torch
 import torch.nn.functional as F
@@ -9,6 +12,8 @@ import cv2
 import math
 import json
 import codecs
+import uuid
+from unifiedefficientloader import IncrementalSafetensorsWriter, MemoryEfficientSafeOpen
 
 
 def resize_nchw(samples: torch.Tensor, width: int, height: int, method: str, crop: str = "disabled") -> torch.Tensor:
@@ -1232,5 +1237,59 @@ def repair_and_minify_json(text: str) -> str:
         return json.dumps(parsed, separators=(',', ':'))
     except Exception:
         return repaired_str
+
+
+@contextmanager
+def atomic_uel_writer(output_path: str | Path, metadata: dict | None = None):
+    """Write incrementally with UEL and expose the destination only after finalization."""
+    output_str = str(output_path)
+    directory = os.path.dirname(output_str) or "."
+    os.makedirs(directory, exist_ok=True)
+    basename = os.path.basename(output_str)
+    temporary = os.path.join(directory, f".{basename}.{uuid.uuid4().hex}.tmp")
+    try:
+        with IncrementalSafetensorsWriter(
+            temporary,
+            metadata=metadata or {},
+            max_workers=1,
+        ) as writer:
+            yield writer
+        os.replace(temporary, output_str)
+    finally:
+        if os.path.exists(temporary):
+            os.remove(temporary)
+
+
+def read_uel_safetensors_dict(
+    path: str | Path,
+    keys: Sequence[str] | None = None,
+    *,
+    pin_memory: bool = False,
+) -> tuple[dict[str, torch.Tensor], dict[str, str]]:
+    """Read safetensors keys asynchronously via UEL with bounded prefetch and explicit release."""
+    tensors: dict[str, torch.Tensor] = {}
+    with closing(MemoryEfficientSafeOpen(str(path), low_memory=True)) as handle:
+        metadata = dict(handle.metadata() or {})
+        target_keys = list(keys) if keys is not None else list(handle.keys())
+        if target_keys:
+            stream = handle.async_stream(
+                target_keys,
+                batch_size=1,
+                prefetch_batches=1,
+                pin_memory=pin_memory,
+            )
+            try:
+                for batch in stream:
+                    for name, tensor in batch:
+                        try:
+                            tensors[name] = tensor
+                        finally:
+                            handle.mark_processed(name)
+            finally:
+                close_stream = getattr(stream, "close", None)
+                if callable(close_stream):
+                    close_stream()
+    return tensors, metadata
+
 
 

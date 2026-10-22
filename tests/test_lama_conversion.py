@@ -42,9 +42,23 @@ def test_convert_strips_generator_prefix_and_records_metadata(tmp_path, monkeypa
         assert set(converted.keys()) == set(expected)
         assert converted.metadata()["architecture"] == "FFCResNetGenerator"
         assert converted.metadata()["state_dict_prefix_removed"] == "generator."
-        for key, tensor in expected.items():
-            assert torch.equal(converted.get_tensor(key), tensor)
-            converted.mark_processed(key)
+        stream = converted.async_stream(
+            list(expected),
+            batch_size=1,
+            prefetch_batches=1,
+            pin_memory=False,
+        )
+        try:
+            for batch in stream:
+                for key, converted_tensor in batch:
+                    try:
+                        assert torch.equal(converted_tensor, expected[key])
+                    finally:
+                        converted.mark_processed(key)
+        finally:
+            close_stream = getattr(stream, "close", None)
+            if callable(close_stream):
+                close_stream()
     finally:
         converted.close()
 

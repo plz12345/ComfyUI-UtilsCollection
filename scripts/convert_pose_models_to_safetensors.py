@@ -57,8 +57,25 @@ def convert(kind, source, destination):
         handler = MemoryEfficientSafeOpen(str(source), low_memory=True)
         try:
             raw_keys = list(handler.keys())
-            raw_state = {key: handler.get_tensor(key) for key in raw_keys}
             source_meta = handler.metadata() or {}
+            raw_state = {}
+            stream = handler.async_stream(
+                raw_keys,
+                batch_size=1,
+                prefetch_batches=1,
+                pin_memory=False,
+            )
+            try:
+                for batch in stream:
+                    for key, tensor in batch:
+                        try:
+                            raw_state[key] = tensor
+                        finally:
+                            handler.mark_processed(key)
+            finally:
+                close_stream = getattr(stream, "close", None)
+                if callable(close_stream):
+                    close_stream()
         finally:
             handler.close()
         for alias_key, target_key in source_meta.items():
@@ -121,7 +138,7 @@ def convert(kind, source, destination):
     try:
         with IncrementalSafetensorsWriter(str(temporary), metadata=metadata, max_workers=1) as writer:
             for key, value in converted.items():
-                writer.write(key, value)
+                writer.write_batch([(key, value)])
         verify_output(temporary, converted)
         temporary.replace(destination)
     finally:

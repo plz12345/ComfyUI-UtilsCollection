@@ -6,7 +6,6 @@ import types
 import logging
 import torch
 import torch.nn.functional as F
-from safetensors.torch import save_file
 
 import comfy
 import nodes
@@ -37,6 +36,7 @@ from ..helpers.encoder_helpers import(
     prepare_image_placeholder_prompt,
     extract_and_flatten_images,
     resolve_embedding_output_path,
+    save_uel_embedding_safetensors,
     visual_fusion_grid,
     prepare_vlm_image,
     prepare_vae_reference_image,
@@ -2993,10 +2993,7 @@ class UC_Krea2InputEmbeds(io.ComfyNode):
 
             # Save the safetensors file (ensure nested directories exist)
             target_path = resolve_embedding_output_path(embeddings_dir, f"{f_name}.safetensors")
-            os.makedirs(os.path.dirname(target_path), exist_ok=True)
-
-            state_dict_safe = {k: v.contiguous() for k, v in state_dict.items()}
-            save_file(state_dict_safe, target_path)
+            save_uel_embedding_safetensors(target_path, state_dict)
 
             last_state_dict = state_dict
             last_tensor_2d = tensor_2d
@@ -3166,10 +3163,7 @@ class UC_Qwen3VLInputEmbeds(io.ComfyNode):
 
             # Save the safetensors file (ensure nested directories exist)
             target_path = resolve_embedding_output_path(embeddings_dir, f"{f_name}.safetensors")
-            os.makedirs(os.path.dirname(target_path), exist_ok=True)
-
-            state_dict_safe = {k: v.contiguous() for k, v in state_dict.items()}
-            save_file(state_dict_safe, target_path)
+            save_uel_embedding_safetensors(target_path, state_dict)
 
             last_state_dict = state_dict
             last_tensor_2d = tensor_2d

@@ -55,15 +55,30 @@ def verify_output(path: Path, expected: dict[str, torch.Tensor]) -> None:
                 f"Safetensors key mismatch: missing={missing[:5]}, unexpected={unexpected[:5]}"
             )
 
-        for key, source_tensor in expected.items():
-            converted_tensor = converted.get_tensor(key)
-            if converted_tensor.shape != source_tensor.shape:
-                raise ValueError(f"Safetensors shape mismatch for {key}")
-            if converted_tensor.dtype != source_tensor.dtype:
-                raise ValueError(f"Safetensors dtype mismatch for {key}")
-            if not torch.equal(converted_tensor, source_tensor):
-                raise ValueError(f"Safetensors value mismatch for {key}")
-            converted.mark_processed(key)
+        ordered_keys = list(expected)
+        stream = converted.async_stream(
+            ordered_keys,
+            batch_size=1,
+            prefetch_batches=1,
+            pin_memory=False,
+        )
+        try:
+            for batch in stream:
+                for key, converted_tensor in batch:
+                    try:
+                        source_tensor = expected[key]
+                        if converted_tensor.shape != source_tensor.shape:
+                            raise ValueError(f"Safetensors shape mismatch for {key}")
+                        if converted_tensor.dtype != source_tensor.dtype:
+                            raise ValueError(f"Safetensors dtype mismatch for {key}")
+                        if not torch.equal(converted_tensor, source_tensor):
+                            raise ValueError(f"Safetensors value mismatch for {key}")
+                    finally:
+                        converted.mark_processed(key)
+        finally:
+            close_stream = getattr(stream, "close", None)
+            if callable(close_stream):
+                close_stream()
     finally:
         converted.close()
 
@@ -96,7 +111,7 @@ def convert(source: Path, destination: Path, *, force: bool) -> None:
             str(temporary), metadata=metadata, max_workers=1
         ) as writer:
             for key, tensor in state_dict.items():
-                writer.write(key, tensor)
+                writer.write_batch([(key, tensor)])
         verify_output(temporary, state_dict)
         temporary.replace(destination)
     finally:
