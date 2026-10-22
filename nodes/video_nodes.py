@@ -171,7 +171,7 @@ class UC_SaveVideo(io.ComfyNode):
                     min=0,
                     max=16,
                     step=1,
-                    tooltip="Extra compression using both past and future frames. Keep at 0 for smooth backward scrubbing on editor timelines; raise to 2-4 for smaller files.",
+                    tooltip="Extra compression between frames. Keep at 0 for smooth scrubbing and frame-by-frame cutting in video editors; raise to 2-4 for smaller file sizes.",
                 ),
                 io.Float.Input(
                     "bitrate_mbps",
