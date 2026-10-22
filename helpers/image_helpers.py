@@ -31,6 +31,7 @@ import torch
 import torch.nn.functional as F
 import torchaudio
 from torchvision.ops import nms as torchvision_nms
+from tqdm import tqdm
 from nodes import MAX_RESOLUTION
 
 from .helper_functions import ASPECT_RATIOS, resize_nchw
@@ -1154,13 +1155,23 @@ def run_yolo_detect(images, *, bbox_detector=None, segm_detector=None, threshold
 
     patcher, forward = active_detector.patcher, active_detector.forward
     use_segm = bool(getattr(active_detector, "use_segm", getattr(patcher.model, "task", "bbox") == "segm"))
+    model_name = getattr(patcher.model, "model_name", type(patcher.model).__name__)
+    task_label = "segm" if use_segm else "bbox"
     progress = comfy.utils.ProgressBar(len(images))
     detections_source = _iter_yolo_batch(
         patcher, images, forward, threshold=threshold, nms_threshold=nms_threshold,
         max_detections=max_detections, batch_size=batch_size, use_segm=use_segm, progress=progress,
     )
+    temporal_filled = 0
     if temporal_filter:
-        detections_source = fill_temporal_yolo_detections(list(detections_source), height, width, radius=temporal_radius, min_support=temporal_min_support, match_iou=temporal_match_iou)
+        raw_detections = [
+            det for det in tqdm(detections_source, total=len(images), desc=f"YOLO Detect ({model_name})", unit="frame")
+        ]
+        raw_count = sum(len(frame_dets) for frame_dets in raw_detections)
+        detections_source = fill_temporal_yolo_detections(raw_detections, height, width, radius=temporal_radius, min_support=temporal_min_support, match_iou=temporal_match_iou)
+        temporal_filled = max(0, sum(len(frame_dets) for frame_dets in detections_source) - raw_count)
+    else:
+        detections_source = tqdm(detections_source, total=len(images), desc=f"YOLO Detect ({model_name})", unit="frame")
 
     frame_masks, individual_mask_list, frame_bboxes = [], [], []
     drop_size_int = max(int(drop_size), 1)
@@ -1187,6 +1198,13 @@ def run_yolo_detect(images, *, bbox_detector=None, segm_detector=None, threshold
 
     masks_out = (torch.stack(individual_mask_list, dim=0) if individual_mask_list else torch.zeros((1, height, width), dtype=torch.float32)) if individual_masks else torch.stack(frame_masks, dim=0)
     bboxes_out = frame_bboxes[0] if len(images) == 1 else frame_bboxes
+    total_boxes = sum(len(b) for b in frame_bboxes)
+    active_frames = sum(1 for b in frame_bboxes if b)
+    temporal_note = f", temporal_filled={temporal_filled}" if temporal_filter else ""
+    logging.info(
+        "[UC_YOLODetect] Completed %s (%s): %d frame(s) at %dx%d | %d detection(s) across %d/%d frame(s)%s | masks=%s",
+        model_name, task_label, len(images), width, height, total_boxes, active_frames, len(images), temporal_note, tuple(masks_out.shape),
+    )
     return masks_out, bboxes_out
 
 
@@ -1247,8 +1265,11 @@ class CachedVideoFrames:
         indices = [int(index) % self.shape[0] for index in indices]
         positions = {}
         frames = None
+        iterator = enumerate(indices)
+        if not scalar and len(indices) > 1:
+            iterator = tqdm(iterator, total=len(indices), desc="Reading Cached Video Frames", unit="frame", leave=False)
         with zipfile.ZipFile(self.path) as archive:
-            for position, index in enumerate(indices):
+            for position, index in iterator:
                 if index not in positions:
                     data = archive.read(f"frames/{index:08d}.{self.storage}")
                     if self.storage == "png8":
@@ -1334,7 +1355,7 @@ def _write_components(path, key, frames, shape, audio, rate, storage):
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
         with zipfile.ZipFile(temporary, "w", allowZip64=True) as archive:
-            for index in range(shape[0]):
+            for index in tqdm(range(shape[0]), desc="Caching Video Components", unit="frame"):
                 if index % 16 == 0:
                     throw_exception_if_processing_interrupted()
                 array = frames[index].detach().cpu().numpy()
@@ -1587,7 +1608,7 @@ def _write_streamed_h3_components(path, key, video, megapixels, storage):
             def factory(stopped):
                 return closing(_decode_h3_batches(video, megapixels, audio_file, details, stopped))
             count = 0
-            with _prefetch_h3_batches(factory) as batches:
+            with _prefetch_h3_batches(factory) as batches, tqdm(desc="Decoding & Caching H3 Video Components", unit="frame") as pbar:
                 for batch in batches:
                     for frame in batch:
                         throw_exception_if_processing_interrupted()
@@ -1602,6 +1623,7 @@ def _write_streamed_h3_components(path, key, video, megapixels, storage):
                             with archive.open(f"frames/{count:08d}.npz", "w", force_zip64=True) as entry:
                                 np.savez_compressed(entry, frame=array)
                         count += 1
+                        pbar.update(1)
                     shape = (count, *batch.shape[1:])
                     del frame, array, batch
             if not count:
@@ -1613,6 +1635,11 @@ def _write_streamed_h3_components(path, key, video, megapixels, storage):
                 "frame_rate": str(details["rate"]), "sample_rate": details["sample_rate"],
             }))
         os.replace(temporary, path)
+        audio_desc = f"{details['sample_rate']}Hz ({details.get('samples', 0)} samples)" if details.get("sample_rate") else "none"
+        logging.info(
+            "[VideoComponents] Cached %d frame(s) at %dx%d (%s fps, storage=%s, audio=%s) -> %s",
+            shape[0], shape[2], shape[1], details["rate"], storage, audio_desc, path.name,
+        )
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -2732,8 +2759,10 @@ def scan_video_frame_records(
             timestamp=timestamp,
             key_frame=bool(frame.key_frame),
         )
-        for frame_index, timestamp, frame in _active_video_frames(
-            video, source_factory
+        for frame_index, timestamp, frame in tqdm(
+            _active_video_frames(video, source_factory),
+            desc="Scanning Video Stream",
+            unit="frame",
         )
     ]
     if not records:
@@ -3045,16 +3074,18 @@ def decode_selected_video_frames(
     selected_images: dict[int, torch.Tensor] = {}
     last_index = max(expected)
 
-    for frame_index, timestamp, frame in _active_video_frames(
-        video, source_factory
-    ):
-        record = expected.get(frame_index)
-        if record is not None:
-            if timestamp != record.timestamp:
-                raise ValueError("Video timestamps changed between selection and decoding.")
-            selected_images[frame_index] = _frame_to_image(frame)
-        if frame_index >= last_index:
-            break
+    with tqdm(total=len(records), desc="Decoding Selected Video Frames", unit="frame") as pbar:
+        for frame_index, timestamp, frame in _active_video_frames(
+            video, source_factory
+        ):
+            record = expected.get(frame_index)
+            if record is not None:
+                if timestamp != record.timestamp:
+                    raise ValueError("Video timestamps changed between selection and decoding.")
+                selected_images[frame_index] = _frame_to_image(frame)
+                pbar.update(1)
+            if frame_index >= last_index:
+                break
 
     missing = [record.frame_index for record in records if record.frame_index not in selected_images]
     if missing:
@@ -3409,6 +3440,13 @@ def sample_video_frames_as_images(
         format_video_timestamp(timestamp, timestamp_format)
         for timestamp in output_timestamps
     ]
+    keyframe_count = sum(1 for r in records if r.key_frame)
+    out_h, out_w = int(image_batch.shape[1]), int(image_batch.shape[2])
+    ts_range = f"{timestamps[0]}..{timestamps[-1]}" if timestamps else "none"
+    logging.info(
+        "[UC_SampleVideoFrames] Scanned %d frame(s) (%d keyframes) -> selected %d frame(s) via '%s' at %dx%d | runtime=%.2fs | range=%s",
+        len(records), keyframe_count, len(selected), sampling_strategy, out_w, out_h, video_runtime, ts_range,
+    )
 
     return SampledVideoFrames(
         image_batch=image_batch,

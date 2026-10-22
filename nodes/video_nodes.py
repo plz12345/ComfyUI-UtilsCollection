@@ -1,8 +1,10 @@
 import hashlib
+import logging
 import os
 from typing import Any
 
 import torch
+from tqdm import tqdm
 from comfy_api.latest import InputImpl, Types, io, ui
 from ..helpers.model_helpers import concatenate_audio_list
 from ..helpers.video_helpers import (
@@ -299,19 +301,27 @@ class UC_ConcatenateVideoList(io.ComfyNode):
             return io.NodeOutput(valid_videos[0])
 
         audio_track = complete_audio[0] if (complete_audio and isinstance(complete_audio, list)) else complete_audio
+        total_frames = 0
+        total_duration = 0.0
+        components_list = []
+        for v in tqdm(valid_videos, desc="Inspecting Video Clips for Concatenation", unit="clip"):
+            try:
+                comp = v.get_components()
+                components_list.append(comp)
+                fps = float(getattr(comp, "frame_rate", 24.0) or 24.0)
+                f_count = len(comp.images) if getattr(comp, "images", None) is not None else 0
+                total_frames += f_count
+                total_duration += (f_count / fps) if fps > 0 else 0.0
+            except Exception:
+                components_list.append(None)
+
         if audio_track is None:
-            has_any_audio = False
-            for v in valid_videos:
-                try:
-                    if v.get_components().audio is not None:
-                        has_any_audio = True
-                        break
-                except Exception:
-                    pass
+            has_any_audio = any(comp is not None and comp.audio is not None for comp in components_list)
             if has_any_audio:
                 collected_audios = []
-                for v in valid_videos:
-                    comp = v.get_components()
+                for comp in components_list:
+                    if comp is None:
+                        continue
                     if comp.audio is not None:
                         collected_audios.append(comp.audio)
                     else:
@@ -322,5 +332,10 @@ class UC_ConcatenateVideoList(io.ComfyNode):
                 audio_track = concatenate_audio_list(collected_audios)
 
         cat_video = InputImpl.VideoFromList(valid_videos, audio_track, Types.VideoCodec.AUTO)
+        audio_mode = "override" if complete_audio is not None else ("stitched" if audio_track is not None else "none")
+        logging.info(
+            "[UC_ConcatenateVideoList] Joined %d video clip(s) -> %d total frame(s) (%.2fs) | audio=%s",
+            len(valid_videos), total_frames, total_duration, audio_mode,
+        )
         return io.NodeOutput(cat_video)
 

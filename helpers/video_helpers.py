@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from enum import Enum
 from fractions import Fraction
 import json
+import logging
 import math
 import os
 import re
@@ -22,6 +23,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torchaudio
+from tqdm import tqdm
 
 
 VIDEO_EXTENSIONS = {
@@ -509,7 +511,8 @@ def save_keyframe_optimized_video(
             a_stream = container.add_stream("aac", rate=audio_sample_rate, layout="stereo")
 
         prev_thumb = None
-        for i in range(batch):
+        cut_count = 0
+        for i in tqdm(range(batch), desc=f"Encoding Video ({target_codec})", unit="frame"):
             frame_tensor = images[i, :out_height, :out_width, :3]
             thumb = F.adaptive_avg_pool2d(frame_tensor.permute(2, 0, 1).unsqueeze(0), (16, 16))
             is_cut = (i == 0)
@@ -522,6 +525,7 @@ def save_keyframe_optimized_video(
             frame = av.VideoFrame.from_ndarray(uint8_img, format="rgb24")
             frame.pts = i
             if is_cut:
+                cut_count += 1
                 frame.pict_type = av.video.frame.PictureType.I
                 frame.key_frame = True
 
@@ -551,6 +555,11 @@ def save_keyframe_optimized_video(
     finally:
         container.close()
 
+    audio_desc = f"aac {audio_sample_rate}Hz stereo" if audio_np is not None else "none"
+    logging.info(
+        "[UC_SaveVideo] Saved %d frame(s) (%.2fs at %.2f fps) at %dx%d | codec=%s, scene_keyframes=%d, audio=%s -> %s",
+        batch, batch / fps, fps, out_width, out_height, target_codec, cut_count, audio_desc, output_path,
+    )
     return output_path, file, subfolder
 
 

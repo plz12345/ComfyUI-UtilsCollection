@@ -1,6 +1,8 @@
+import logging
 import math
 
 import torch
+from tqdm import tqdm
 
 from comfy_api.latest import ComfyExtension, io
 import comfy.model_management as mm
@@ -427,6 +429,8 @@ class UC_VideoResolutionAndLengthPicker(io.ComfyNode):
                         pass
 
         # Resample video input to 24 fps if not already 24 fps (preserving duration/speed)
+        orig_fps = source_fps
+        orig_frame_count = int(source_frames.shape[0]) if source_frames is not None and torch.is_tensor(source_frames) and source_frames.ndim == 4 else 0
         if has_video_input and source_frames is not None and torch.is_tensor(source_frames) and source_frames.ndim == 4 and source_frames.shape[0] > 0:
             if abs(source_fps - 24.0) > 0.01 and source_fps > 0:
                 source_frames, source_fps = resample_video_frames_to_24fps(source_frames, source_fps)
@@ -445,13 +449,16 @@ class UC_VideoResolutionAndLengthPicker(io.ComfyNode):
         length = h3_video_length_from_seconds(effective_duration)
 
         # 3. Match video length if multiple frames are connected
+        trimmed_frames = 0
+        padded_frames = 0
         if match_video_length and source_frames is not None and torch.is_tensor(source_frames) and source_frames.shape[0] > 1:
             frame_count = source_frames.shape[0]
             if frame_count > length:
+                trimmed_frames = frame_count - length
                 source_frames = source_frames[:length]
             elif frame_count < length:
-                pad_count = length - frame_count
-                source_frames = torch.cat([source_frames, source_frames[-1:].repeat(pad_count, 1, 1, 1)], dim=0)
+                padded_frames = length - frame_count
+                source_frames = torch.cat([source_frames, source_frames[-1:].repeat(padded_frames, 1, 1, 1)], dim=0)
 
         # 4. Prepare audio for MiniMax H3 (32kHz stereo, hop aligned, untrimmed)
         prepared_audio = prepare_video_audio_for_h3(raw_audio)
@@ -473,10 +480,26 @@ class UC_VideoResolutionAndLengthPicker(io.ComfyNode):
 
             adjusted_width = max(multiple, round_to_nearest(width, multiple))
             adjusted_height = max(multiple, round_to_nearest(height, multiple))
-            adjusted_samples = resize_nchw(
-                samples, int(adjusted_width), int(adjusted_height), scale_method, crop_method
-            )
+            if samples.shape[0] > 1:
+                chunks = []
+                with tqdm(total=samples.shape[0], desc="Resizing Video Frames", unit="frame") as pbar:
+                    for start in range(0, samples.shape[0], 16):
+                        chunk = samples[start:start + 16]
+                        chunks.append(resize_nchw(chunk, int(adjusted_width), int(adjusted_height), scale_method, crop_method))
+                        pbar.update(chunk.shape[0])
+                adjusted_samples = torch.cat(chunks, dim=0)
+            else:
+                adjusted_samples = resize_nchw(
+                    samples, int(adjusted_width), int(adjusted_height), scale_method, crop_method
+                )
             adjusted_image_out = adjusted_samples.movedim(1, -1)
+            if has_video_input or orig_frame_count > 1:
+                audio_desc = f"32kHz ({prepared_audio['waveform'].shape[-1]} samples)" if isinstance(prepared_audio, dict) and prepared_audio.get("waveform") is not None else "none"
+                logging.info(
+                    "[UC_VideoResolutionAndLengthPicker] Source %d frame(s) at %dx%d (%.2f fps) -> %d frame(s) at %dx%d (H3 length=%d, %.2fs, scale=%s, crop=%s, trimmed=%d, padded=%d) | audio=%s",
+                    orig_frame_count, img_w, img_h, orig_fps, int(adjusted_image_out.shape[0]), adjusted_width, adjusted_height,
+                    length, effective_duration, scale_method, crop_method, trimmed_frames, padded_frames, audio_desc,
+                )
         else:
             target_ratio_w, target_ratio_h = ASPECT_RATIOS[aspect_ratio]
             base_scale = math.sqrt(total / (target_ratio_w * target_ratio_h))

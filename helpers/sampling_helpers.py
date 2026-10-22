@@ -13,6 +13,7 @@ import comfy.model_management
 import comfy.utils
 from comfy.nested_tensor import NestedTensor
 from comfy_extras.nodes_custom_sampler import SamplerCustomAdvanced, SplitSigmas
+from tqdm import tqdm
 
 LOGGER = logging.getLogger("ComfyUI-UtilsCollection.sampling")
 
@@ -1042,7 +1043,7 @@ def split_h3_video_components_into_segments(
     trim_trailing_list = []
     soundtrack = components.audio
 
-    for f_start, real_end, seg_length, seg_overlap, padded_frames in windows:
+    for f_start, real_end, seg_length, seg_overlap, padded_frames in tqdm(windows, desc="Preparing H3 Video Segments", unit="seg"):
         frame_positions = [min(pos, max(f_start, real_end - 1)) for pos in range(f_start, f_start + seg_length)]
         frame_indices = [min(max(0, round(pos * source_rate / 24)), source_count - 1) for pos in frame_positions]
         frames = source_frames[frame_indices]
@@ -1086,6 +1087,14 @@ def split_h3_video_components_into_segments(
         video_list.append(prep_video)
         transcript_list.append(t_audio)
         trim_trailing_list.append(int(padded_frames))
+
+    has_src_audio = soundtrack is not None and soundtrack.get("waveform") is not None and soundtrack["waveform"].numel() > 0
+    LOGGER.info(
+        "[UC_H3RefVideoSegments] Source %d frame(s) (%.2fs at %.2f fps) -> %d segment(s) at %dx%d | lengths=%s | overlap=%d frame(s) | padded=%s | audio=%s",
+        source_count, source_seconds, source_rate, len(windows), out_w, out_h,
+        [int(x) for x in length_list], ov_frames, trim_trailing_list,
+        "32kHz" if has_src_audio else "silence-filled",
+    )
 
     if return_trim_metadata:
         return (
