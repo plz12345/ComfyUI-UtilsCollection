@@ -1886,18 +1886,19 @@ def test_minimax_h3_scene_image_any2va_contract():
         assert "MiniMax H3 Scene Image to Video Adaptive Timeline" in instruction
         assert "The single supplied image acts as the visual seed" in instruction
         assert "extrapolate a continuous, escalating progression of motion" in instruction
-        assert "Do not emit `<Picture 1>` or any media identifier inside the summary or timeline" in instruction
-        assert (
-            "Do not create a Video namespace from the image" in instruction
-            or "Do not create a <Video N> namespace from the image" in instruction
-        )
+        assert "do not emit `<Picture 1>` or any media identifier inside the summary or timeline" in instruction
+        assert "do not create a <Video N> namespace from the image" in instruction
+        assert "Conditional User-Instructed Reference Rule:" in instruction
+        assert "Only when the user instruction explicitly specifies" in instruction
+        assert "referenced from <Picture N>" in instruction
+        assert "#### retention_analysis (Conditional on User Instruction)" in instruction
         assert "In-Place Character Replacement Rule (No Replacement Instructions):" in instruction
         assert "never write a prompt that instructs replacement, swapping, editing, or transfer" in instruction
         assert "completely replace the character in the full description across all instances" in instruction
         assert "subject_definitions:" in instruction
         assert "summary:" in instruction
+        assert "retention_analysis:" in instruction
         assert "detailed_description:" in instruction
-        assert "retention_analysis:" not in instruction
 
 
 def test_minimax_h3_scene_image_t2va_contract():
@@ -1938,13 +1939,17 @@ def test_minimax_h3_storyboard_any2va_contract():
         assert "comic book or graphic conventions be described or included in the output prompt" in instruction
         assert "Strip panel borders, speech bubbles, sound effect lettering, and graphic conventions." in instruction
         assert "Dialogue text visibly printed in speech bubbles must be transcribed into `[SPEECH]` rows" in instruction
+        assert "Conditional User-Instructed Reference Rule:" in instruction
+        assert "Only when the user instruction explicitly specifies" in instruction
+        assert "referenced from <Picture N>" in instruction
+        assert "#### retention_analysis (Conditional on User Instruction)" in instruction
         assert "In-Place Character Replacement Rule (No Replacement Instructions):" in instruction
         assert "never write a prompt that instructs replacement, swapping, editing, or transfer" in instruction
         assert "completely replace the character in the full description across all instances" in instruction
         assert "subject_definitions:" in instruction
         assert "summary:" in instruction
+        assert "retention_analysis:" in instruction
         assert "detailed_description:" in instruction
-        assert "retention_analysis:" not in instruction
 
 
 def test_minimax_h3_storyboard_t2va_contract():
@@ -2062,10 +2067,12 @@ def test_h3_dedicated_query_presets_contracts():
     scene_any_pref = vlm_presets.system_query_additional_vlm["h3_scene_image_any2va_prefix"]
     scene_any_suff = vlm_presets.system_query_additional_vlm["h3_scene_image_any2va_suffix"]
     assert "strictly as an opening scene seed" in scene_any_pref
+    assert "if and only if the user request explicitly specifies" in scene_any_pref
     assert "never write a prompt that instructs replacement" in scene_any_pref
     assert "completely replace the character in the full description at all instances" in scene_any_pref
     assert "[reference generation]" in scene_any_suff
-    assert "No `retention_analysis:` field" in scene_any_suff
+    assert "Omit by default; include `retention_analysis:`" in scene_any_suff
+    assert "only when the user request explicitly specifies downstream reference media" in scene_any_suff
     assert "completely replace the character in-place across all instances" in scene_any_suff
 
     scene_t2va_pref = vlm_presets.system_query_additional_vlm["h3_scene_image_t2va_prefix"]
@@ -2083,10 +2090,12 @@ def test_h3_dedicated_query_presets_contracts():
     assert "a stitched-together row of images outlining the timeline progression" in story_any_pref
     assert "multiple separate images showing the progression of the timeline" in story_any_pref
     assert "a video showing a detailed progression" in story_any_pref
+    assert "if and only if the user request explicitly specifies" in story_any_pref
     assert "never write a prompt that instructs replacement" in story_any_pref
     assert "completely replace the character in the full description at all instances" in story_any_pref
     assert "[reference generation]" in story_any_suff
-    assert "No `retention_analysis:` field" in story_any_suff
+    assert "Omit by default; include `retention_analysis:`" in story_any_suff
+    assert "only when the user request explicitly specifies downstream reference media" in story_any_suff
     assert "completely replace the character in-place across all instances" in story_any_suff
 
     story_t2va_pref = vlm_presets.system_query_additional_vlm["h3_storyboard_t2va_prefix"]
